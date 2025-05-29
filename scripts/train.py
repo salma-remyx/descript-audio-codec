@@ -16,11 +16,49 @@ from audiotools.data.datasets import ConcatDataset
 from audiotools.ml.decorators import timer
 from audiotools.ml.decorators import Tracker
 from audiotools.ml.decorators import when
-from torch.utils.tensorboard import SummaryWriter
+import wandb
 
 import dac
 
 warnings.filterwarnings("ignore", category=UserWarning)
+
+class WandbTracker(Tracker):
+    """Wrapper around Tracker that adds wandb integration."""
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.wandb_initialized = False
+        
+    def init_wandb(self, project, name, config):
+        """Initialize wandb if not already initialized."""
+        if not self.wandb_initialized and self.rank == 0:
+            wandb.init(project=project, name=name, config=config)
+            self.wandb_initialized = True
+            
+    def log(self, prefix, reduction="mean", history=True):
+        """Override log to also log to wandb."""
+        original_log = super().log(prefix, reduction, history)
+        
+        def wandb_log_fn(fn):
+            def wrapper(*args, **kwargs):
+                output = fn(*args, **kwargs)
+                if self.rank == 0 and self.wandb_initialized:
+                    # Convert tensor values to scalars
+                    wandb_output = {}
+                    for k, v in output.items():
+                        if torch.is_tensor(v):
+                            wandb_output[k] = v.item()
+                        else:
+                            wandb_output[k] = v
+                    wandb.log(wandb_output, step=self.step)
+                return output
+            return wrapper
+        
+        return lambda fn: wandb_log_fn(original_log(fn))
+        
+    def finish(self):
+        """Finish wandb run."""
+        if self.rank == 0 and self.wandb_initialized:
+            wandb.finish()
 
 # Enable cudnn autotuner to speed up training
 # (can be altered by the funcs.seed function)
@@ -312,8 +350,8 @@ def checkpoint(state, save_iters, save_path):
 
 
 @torch.no_grad()
-def save_samples(state, val_idx, writer):
-    state.tracker.print("Saving audio samples to TensorBoard")
+def save_samples(state, val_idx):
+    state.tracker.print("Saving audio samples to wandb")
     state.generator.eval()
 
     samples = [state.val_data[idx] for idx in val_idx]
@@ -332,9 +370,11 @@ def save_samples(state, val_idx, writer):
 
     for k, v in audio_dict.items():
         for nb in range(v.batch_size):
-            v[nb].cpu().write_audio_to_tb(
-                f"{k}/sample_{nb}.wav", writer, state.tracker.step
-            )
+            # Save audio to wandb
+            audio_path = f"temp_{k}_sample_{nb}.wav"
+            v[nb].cpu().write(audio_path)
+            wandb.log({f"audio/{k}/sample_{nb}": wandb.Audio(audio_path)}, step=state.tracker.step)
+            os.remove(audio_path)  # Clean up temporary file
 
 
 def validate(state, val_dataloader, accel):
@@ -368,14 +408,22 @@ def train(
         "vq/commitment_loss": 0.25,
         "vq/codebook_loss": 1.0,
     },
+    name: str = None,
 ):
     util.seed(seed)
     Path(save_path).mkdir(exist_ok=True, parents=True)
-    writer = (
-        SummaryWriter(log_dir=f"{save_path}/logs") if accel.local_rank == 0 else None
+    
+    # Initialize tracker with wandb integration
+    tracker = WandbTracker(
+        log_file=f"{save_path}/log.txt", 
+        rank=accel.local_rank
     )
-    tracker = Tracker(
-        writer=writer, log_file=f"{save_path}/log.txt", rank=accel.local_rank
+    
+    # Initialize wandb through tracker
+    tracker.init_wandb(
+        project="descript-audio-codec",
+        name=name,
+        config=args
     )
 
     state = load(args, accel, tracker, save_path)
@@ -396,7 +444,7 @@ def train(
         persistent_workers=True if num_workers > 0 else False,
     )
 
-    # Wrap the functions so that they neatly track in TensorBoard + progress bars
+    # Wrap the functions so that they neatly track in wandb + progress bars
     # and only run when specific conditions are met.
     global train_loop, val_loop, validate, save_samples, checkpoint
     train_loop = tracker.log("train", "value", history=False)(
@@ -417,7 +465,7 @@ def train(
                 tracker.step == num_iters - 1 if num_iters is not None else False
             )
             if tracker.step % sample_freq == 0 or last_iter:
-                save_samples(state, val_idx, writer)
+                save_samples(state, val_idx)
 
             if tracker.step % valid_freq == 0 or last_iter:
                 validate(state, val_dataloader, accel)
@@ -426,6 +474,7 @@ def train(
                 tracker.done("val", f"Iteration {tracker.step}")
 
             if last_iter:
+                tracker.finish()
                 break
 
 

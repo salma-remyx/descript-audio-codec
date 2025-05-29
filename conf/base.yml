@@ -88,7 +88,7 @@ train/build_dataset.folders:
   speech_fb:
     - /data/daps/train
   speech_hq:
-    - /data/vctk
+    - /data/studio_sound/speech/vctk
     - /data/vocalset
     - /data/read_speech
     - /data/french_speech
@@ -98,26 +98,12 @@ train/build_dataset.folders:
     - /data/german_speech/
     - /data/russian_speech/
     - /data/spanish_speech/
-  music_hq:
-    - /data/musdb/train
-  music_uq:
-    - /data/jamendo
-  general:
-    - /data/audioset/data/unbalanced_train_segments/
-    - /data/audioset/data/balanced_train_segments/
 
 val/build_dataset.folders:
   speech_hq:
     - /data/daps/val
-  music_hq:
-    - /data/musdb/test
-  general:
-    - /data/audioset/data/eval_segments/
 
 test/build_dataset.folders:
   speech_hq:
     - /data/daps/test
-  music_hq:
-    - /data/musdb/test
-  general:
-    - /data/audioset/data/eval_segments/
+
