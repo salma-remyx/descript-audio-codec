@@ -86,24 +86,24 @@ AudioDataset.without_replacement: true
 
 train/build_dataset.folders:
   speech_fb:
-    - /data/daps/train
+    - /data/shared_data/raw/daps/train
   speech_hq:
-    - /data/studio_sound/speech/vctk
-    - /data/vocalset
-    - /data/read_speech
-    - /data/french_speech
+    - /data/shared_data/raw/vctk
+    - /data/shared_data/raw/vocalset
+    - /data/shared_data/raw/read_speech
+    - /data/shared_data/raw/french_speech
   speech_uq:
-    - /data/emotional_speech/
-    - /data/common_voice/
-    - /data/german_speech/
-    - /data/russian_speech/
-    - /data/spanish_speech/
+    - /data/shared_data/raw/emotional_speech/
+    - /data/shared_data/raw/common_voice/
+    - /data/shared_data/raw/german_speech/
+    - /data/shared_data/raw/russian_speech/
+    - /data/shared_data/raw/spanish_speech/
 
 val/build_dataset.folders:
   speech_hq:
-    - /data/daps/val
+    - /data/shared_data/raw/daps/val
 
 test/build_dataset.folders:
   speech_hq:
-    - /data/daps/test
+    - /data/shared_data/raw/daps/test
 

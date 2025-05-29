@@ -51,6 +51,7 @@ setup(
             "pesq",
             "tabulate",
             "encodec",
+            "wandb",
         ],
     },
 )
