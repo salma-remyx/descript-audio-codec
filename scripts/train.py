@@ -408,7 +408,6 @@ def train(
         "vq/commitment_loss": 0.25,
         "vq/codebook_loss": 1.0,
     },
-    name: str = None,
 ):
     util.seed(seed)
     Path(save_path).mkdir(exist_ok=True, parents=True)
@@ -422,7 +421,7 @@ def train(
     # Initialize wandb through tracker
     tracker.init_wandb(
         project="descript-audio-codec",
-        name=name,
+        name=Path(save_path).name,
         config=args
     )
 
