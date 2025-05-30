@@ -31,6 +31,7 @@ setup(
         "descript-audiotools>=0.7.2",
         "einops",
         "numpy",
+        "soundfile==0.13.1",
         "torch",
         "torchaudio",
         "tqdm",
