@@ -1,6 +1,5 @@
 import math
 from typing import List
-from typing import Union
 
 import numpy as np
 import torch
@@ -9,10 +8,10 @@ from audiotools.ml import BaseModel
 from torch import nn
 
 from .base import CodecMixin
+from dac.nn.layers import RMSNorm
 from dac.nn.layers import Snake1d
 from dac.nn.layers import WNConv1d
 from dac.nn.layers import WNConvTranspose1d
-from dac.nn.quantize import ResidualVectorQuantize
 
 
 def init_weights(m):
@@ -25,8 +24,10 @@ class ResidualUnit(nn.Module):
     def __init__(self, dim: int = 16, dilation: int = 1):
         super().__init__()
         self.block = nn.Sequential(
+            RMSNorm(dim),
             Snake1d(dim),
             WNConv1d(dim, dim, kernel_size=7, dilation=dilation),
+            RMSNorm(dim),
             Snake1d(dim),
             WNConv1d(dim, dim, kernel_size=1),
         )
@@ -77,6 +78,7 @@ class Encoder(nn.Module):
 
         # Create last convolution
         self.block += [
+            RMSNorm(d_model),
             Snake1d(d_model),
             WNConv1d(d_model, d_latent, kernel_size=3),
         ]
@@ -130,6 +132,7 @@ class Decoder(nn.Module):
 
         # Add final conv layer
         layers += [
+            RMSNorm(output_dim),
             Snake1d(output_dim),
             WNConv1d(output_dim, d_out, kernel_size=7),
             nn.Tanh(),
