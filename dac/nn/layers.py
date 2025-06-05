@@ -1,4 +1,4 @@
-import numpy as np
+import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -13,7 +13,7 @@ class RMSNorm(nn.Module):
     """
     def __init__(self, dim: int, eps: float = 1e-6):
         super().__init__()
-        self.scale = nn.Parameter(1e-3 * torch.ones(1, dim, 1))
+        self.scale = nn.Parameter(math.sqrt(eps) * torch.ones(1, dim, 1))
         self.eps = eps
     
     def forward(self, x):
