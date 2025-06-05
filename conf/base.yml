@@ -4,6 +4,7 @@ DAC.encoder_dim: 64
 DAC.encoder_rates: [2, 4, 8, 8]
 DAC.decoder_dim: 1536
 DAC.decoder_rates: [8, 8, 4, 2]
+DAC.latent_noise_max: 0.05  # Maximum standard deviation for noise injection during training
 
 # Quantization
 DAC.n_codebooks: 9
@@ -42,8 +43,7 @@ lambdas:
   mel/loss: 15.0
   adv/feat_loss: 2.0
   adv/gen_loss: 1.0
-  vq/commitment_loss: 0.25
-  vq/codebook_loss: 1.0
+  latents/loss: 0.1
 
 VolumeNorm.db: [const, -16]
 

@@ -366,3 +366,32 @@ class GANLoss(nn.Module):
             for j in range(len(d_fake[i]) - 1):
                 loss_feature += F.l1_loss(d_fake[i][j], d_real[i][j].detach())
         return loss_g, loss_feature
+
+
+class L2LatentsLoss(nn.Module):
+    """Compute L2 penalty on latents to encourage Gaussian distribution.
+    
+    Parameters
+    ----------
+    weight : float, optional
+        Weight of this loss, defaults to 1.0
+    """
+    def __init__(self, weight: float = 1.0):
+        super().__init__()
+        self.weight = weight
+
+    def forward(self, latents: torch.Tensor):
+        """Compute L2 penalty on latents.
+        
+        Parameters
+        ----------
+        latents : Tensor[B x D x T]
+            Latent representations from the encoder
+            
+        Returns
+        -------
+        Tensor[1]
+            L2 penalty loss on latents
+        """
+        # Compute mean squared value across batch and time dimensions
+        return self.weight * torch.mean(torch.pow(latents, 2))

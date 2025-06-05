@@ -24,10 +24,9 @@ def init_weights(m):
 class ResidualUnit(nn.Module):
     def __init__(self, dim: int = 16, dilation: int = 1):
         super().__init__()
-        pad = ((7 - 1) * dilation) // 2
         self.block = nn.Sequential(
             Snake1d(dim),
-            WNConv1d(dim, dim, kernel_size=7, dilation=dilation, padding=pad),
+            WNConv1d(dim, dim, kernel_size=7, dilation=dilation),
             Snake1d(dim),
             WNConv1d(dim, dim, kernel_size=1),
         )
@@ -53,7 +52,6 @@ class EncoderBlock(nn.Module):
                 dim,
                 kernel_size=2 * stride,
                 stride=stride,
-                padding=math.ceil(stride / 2),
             ),
         )
 
@@ -70,7 +68,7 @@ class Encoder(nn.Module):
     ):
         super().__init__()
         # Create first convolution
-        self.block = [WNConv1d(1, d_model, kernel_size=7, padding=3)]
+        self.block = [WNConv1d(1, d_model, kernel_size=7)]
 
         # Create EncoderBlocks that double channels as they downsample by `stride`
         for stride in strides:
@@ -80,7 +78,7 @@ class Encoder(nn.Module):
         # Create last convolution
         self.block += [
             Snake1d(d_model),
-            WNConv1d(d_model, d_latent, kernel_size=3, padding=1),
+            WNConv1d(d_model, d_latent, kernel_size=3),
         ]
 
         # Wrap black into nn.Sequential
@@ -101,7 +99,6 @@ class DecoderBlock(nn.Module):
                 output_dim,
                 kernel_size=2 * stride,
                 stride=stride,
-                padding=math.ceil(stride / 2),
             ),
             ResidualUnit(output_dim, dilation=1),
             ResidualUnit(output_dim, dilation=3),
@@ -123,7 +120,7 @@ class Decoder(nn.Module):
         super().__init__()
 
         # Add first conv layer
-        layers = [WNConv1d(input_channel, channels, kernel_size=7, padding=3)]
+        layers = [WNConv1d(input_channel, channels, kernel_size=7)]
 
         # Add upsampling + MRF blocks
         for i, stride in enumerate(rates):
@@ -134,7 +131,7 @@ class Decoder(nn.Module):
         # Add final conv layer
         layers += [
             Snake1d(output_dim),
-            WNConv1d(output_dim, d_out, kernel_size=7, padding=3),
+            WNConv1d(output_dim, d_out, kernel_size=7),
             nn.Tanh(),
         ]
 
@@ -152,10 +149,7 @@ class DAC(BaseModel, CodecMixin):
         latent_dim: int = None,
         decoder_dim: int = 1536,
         decoder_rates: List[int] = [8, 8, 4, 2],
-        n_codebooks: int = 9,
-        codebook_size: int = 1024,
-        codebook_dim: Union[int, list] = 8,
-        quantizer_dropout: bool = False,
+        latent_noise_max: float = 0.05,  # Maximum standard deviation for noise injection
         sample_rate: int = 44100,
     ):
         super().__init__()
@@ -165,6 +159,7 @@ class DAC(BaseModel, CodecMixin):
         self.decoder_dim = decoder_dim
         self.decoder_rates = decoder_rates
         self.sample_rate = sample_rate
+        self.latent_noise_max = latent_noise_max
 
         if latent_dim is None:
             latent_dim = encoder_dim * (2 ** len(encoder_rates))
@@ -173,17 +168,6 @@ class DAC(BaseModel, CodecMixin):
 
         self.hop_length = np.prod(encoder_rates)
         self.encoder = Encoder(encoder_dim, encoder_rates, latent_dim)
-
-        self.n_codebooks = n_codebooks
-        self.codebook_size = codebook_size
-        self.codebook_dim = codebook_dim
-        self.quantizer = ResidualVectorQuantize(
-            input_dim=latent_dim,
-            n_codebooks=n_codebooks,
-            codebook_size=codebook_size,
-            codebook_dim=codebook_dim,
-            quantizer_dropout=quantizer_dropout,
-        )
 
         self.decoder = Decoder(
             latent_dim,
@@ -209,42 +193,20 @@ class DAC(BaseModel, CodecMixin):
     def encode(
         self,
         audio_data: torch.Tensor,
-        n_quantizers: int = None,
     ):
-        """Encode given audio data and return quantized latent codes
+        """Encode given audio data
 
         Parameters
         ----------
         audio_data : Tensor[B x 1 x T]
             Audio data to encode
-        n_quantizers : int, optional
-            Number of quantizers to use, by default None
-            If None, all quantizers are used.
 
         Returns
         -------
-        dict
-            A dictionary with the following keys:
-            "z" : Tensor[B x D x T]
-                Quantized continuous representation of input
-            "codes" : Tensor[B x N x T]
-                Codebook indices for each codebook
-                (quantized discrete representation of input)
-            "latents" : Tensor[B x N*D x T]
-                Projected latents (continuous representation of input before quantization)
-            "vq/commitment_loss" : Tensor[1]
-                Commitment loss to train encoder to predict vectors closer to codebook
-                entries
-            "vq/codebook_loss" : Tensor[1]
-                Codebook loss to update the codebook
-            "length" : int
-                Number of samples in input audio
+        Tensor[B x D x T]
+            Encoded latent representation
         """
-        z = self.encoder(audio_data)
-        z, codes, latents, commitment_loss, codebook_loss = self.quantizer(
-            z, n_quantizers
-        )
-        return z, codes, latents, commitment_loss, codebook_loss
+        return self.encoder(audio_data)
 
     def decode(self, z: torch.Tensor):
         """Decode given latent codes and return audio data
@@ -269,7 +231,7 @@ class DAC(BaseModel, CodecMixin):
         self,
         audio_data: torch.Tensor,
         sample_rate: int = None,
-        n_quantizers: int = None,
+        training: bool = False,
     ):
         """Model forward pass
 
@@ -278,47 +240,40 @@ class DAC(BaseModel, CodecMixin):
         audio_data : Tensor[B x 1 x T]
             Audio data to encode
         sample_rate : int, optional
-            Sample rate of audio data in Hz, by default None
-            If None, defaults to `self.sample_rate`
-        n_quantizers : int, optional
-            Number of quantizers to use, by default None.
-            If None, all quantizers are used.
+            Sample rate of input audio, by default None
+        training : bool, optional
+            Whether in training mode, by default False
+            If True, injects random Gaussian noise to the latents with std
+            uniformly sampled from [0, latent_noise_max]
 
         Returns
         -------
         dict
-            A dictionary with the following keys:
+            Dictionary containing:
             "z" : Tensor[B x D x T]
-                Quantized continuous representation of input
-            "codes" : Tensor[B x N x T]
-                Codebook indices for each codebook
-                (quantized discrete representation of input)
-            "latents" : Tensor[B x N*D x T]
-                Projected latents (continuous representation of input before quantization)
-            "vq/commitment_loss" : Tensor[1]
-                Commitment loss to train encoder to predict vectors closer to codebook
-                entries
-            "vq/codebook_loss" : Tensor[1]
-                Codebook loss to update the codebook
+                Encoded latent representation (with noise if training=True)
+            "z_clean" : Tensor[B x D x T]
+                Clean encoded latent representation (without noise)
             "length" : int
                 Number of samples in input audio
             "audio" : Tensor[B x 1 x length]
-                Decoded audio data.
+                Reconstructed audio
         """
         length = audio_data.shape[-1]
         audio_data = self.preprocess(audio_data, sample_rate)
-        z, codes, latents, commitment_loss, codebook_loss = self.encode(
-            audio_data, n_quantizers
-        )
-
+        z_clean = self.encode(audio_data)
+        
+        if training:
+            # Add Gaussian noise with random std between 0 and latent_noise_max
+            z = z_clean + torch.randn_like(z_clean) * torch.rand(z_clean.shape[0], 1, 1, device=z_clean.device) * self.latent_noise_max
+        else:
+            z = z_clean
+            
         x = self.decode(z)
         return {
             "audio": x[..., :length],
             "z": z,
-            "codes": codes,
-            "latents": latents,
-            "vq/commitment_loss": commitment_loss,
-            "vq/codebook_loss": codebook_loss,
+            "z_clean": z_clean,
         }
 
 

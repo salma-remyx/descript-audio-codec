@@ -152,6 +152,7 @@ class State:
     mel_loss: losses.MelSpectrogramLoss
     gan_loss: losses.GANLoss
     waveform_loss: losses.L1Loss
+    l2_latents: losses.L2LatentsLoss
 
     train_data: AudioDataset
     val_data: AudioDataset
@@ -222,6 +223,7 @@ def load(
     stft_loss = losses.MultiScaleSTFTLoss()
     mel_loss = losses.MelSpectrogramLoss()
     gan_loss = losses.GANLoss(discriminator)
+    l2_latents = losses.L2LatentsLoss()
 
     return State(
         generator=generator,
@@ -234,6 +236,7 @@ def load(
         stft_loss=stft_loss,
         mel_loss=mel_loss,
         gan_loss=gan_loss,
+        l2_latents=l2_latents,
         tracker=tracker,
         train_data=train_data,
         val_data=val_data,
@@ -273,10 +276,8 @@ def train_loop(state, batch, accel, lambdas):
         )
 
     with accel.autocast():
-        out = state.generator(signal.audio_data, signal.sample_rate)
+        out = state.generator(signal.audio_data, signal.sample_rate, training=True)
         recons = AudioSignal(out["audio"], signal.sample_rate)
-        commitment_loss = out["vq/commitment_loss"]
-        codebook_loss = out["vq/codebook_loss"]
 
     with accel.autocast():
         output["adv/disc_loss"] = state.gan_loss.discriminator_loss(recons, signal)
@@ -291,6 +292,7 @@ def train_loop(state, batch, accel, lambdas):
     state.scheduler_d.step()
 
     with accel.autocast():
+        output["latents/loss"] = state.l2_latents(out["z_clean"])
         output["stft/loss"] = state.stft_loss(recons, signal)
         output["mel/loss"] = state.mel_loss(recons, signal)
         output["waveform/loss"] = state.waveform_loss(recons, signal)
@@ -298,8 +300,6 @@ def train_loop(state, batch, accel, lambdas):
             output["adv/gen_loss"],
             output["adv/feat_loss"],
         ) = state.gan_loss.generator_loss(recons, signal)
-        output["vq/commitment_loss"] = commitment_loss
-        output["vq/codebook_loss"] = codebook_loss
         output["loss"] = sum([v * output[k] for k, v in lambdas.items() if k in output])
 
     state.optimizer_g.zero_grad()

@@ -7,10 +7,12 @@ from torch.nn.utils import weight_norm
 
 
 def WNConv1d(*args, **kwargs):
+    kwargs['padding'] = ((kwargs.get('kernel_size', 1) - 1) * kwargs.get('dilation', 1) - kwargs.get('stride', 1) + 1, 0)
     return weight_norm(nn.Conv1d(*args, **kwargs))
 
 
 def WNConvTranspose1d(*args, **kwargs):
+    kwargs['padding'] = ((kwargs.get('kernel_size', 1) - 1) * kwargs.get('dilation', 1) - kwargs.get('stride', 1) + 1) // 2
     return weight_norm(nn.ConvTranspose1d(*args, **kwargs))
 
 
