@@ -408,7 +408,6 @@ class WavLMLoss(nn.Module):
         self.wavlm_model = WavLMModel.from_pretrained("microsoft/wavlm-large").to(device)
         self.wavlm_model.eval()  # Freeze the model
         
-        
     def forward(self, pred_embeddings: torch.Tensor, target_signal: AudioSignal) -> tuple[torch.Tensor, torch.Tensor]:
         """Compute WavLM losses between predicted and target audio.
         
@@ -419,16 +418,23 @@ class WavLMLoss(nn.Module):
         Returns:
             Tuple of (cosine_loss, mse_loss)
         """
-        with torch.no_grad():
+        # First get target embeddings with no_grad and autocast
+        with torch.no_grad(), torch.cuda.amp.autocast():
+            # Resample audio and move to CPU immediately
+            resampled_audio = self.resampler(target_signal.audio_data.squeeze(1))
+            resampled_audio_np = resampled_audio.cpu().numpy()
+            del resampled_audio  # Clean up GPU memory
+            
             # Process target audio through WavLM
             inputs = self.feature_extractor(
-                self.resampler(target_signal.audio_data.squeeze(1)).cpu().numpy(),
+                resampled_audio_np,
                 sampling_rate=self.sample_rate,
                 return_tensors="pt"
             ).to(pred_embeddings.device)
             
-            # Get target embeddings
+            # Get target embeddings using mixed precision
             target_embeddings = self.wavlm_model(**inputs).last_hidden_state.transpose(1, 2)
+            del inputs  # Clean up GPU memory
             
             # Resample target embeddings if lengths don't match
             if target_embeddings.shape[-1] != pred_embeddings.shape[-1]:
@@ -438,8 +444,12 @@ class WavLMLoss(nn.Module):
                     mode="linear",
                     align_corners=False
                 )
+
+        cosine_loss = 1 - F.cosine_similarity(pred_embeddings, target_embeddings, dim=1).mean()
+        mse_loss = F.mse_loss(pred_embeddings, target_embeddings)
         
-        return (
-            1 - F.cosine_similarity(pred_embeddings, target_embeddings, dim=1).mean(),
-            F.mse_loss(pred_embeddings, target_embeddings)
-        )
+        # Clean up
+        del target_embeddings
+        torch.cuda.empty_cache()
+        
+        return cosine_loss, mse_loss
