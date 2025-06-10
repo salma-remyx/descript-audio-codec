@@ -145,6 +145,7 @@ class State:
     scheduler_g: ExponentialLR
 
     discriminator: Discriminator
+    wavlm_loss: losses.WavLMLoss
     optimizer_d: AdamW
     scheduler_d: ExponentialLR
 
@@ -224,7 +225,8 @@ def load(
     mel_loss = losses.MelSpectrogramLoss()
     gan_loss = losses.GANLoss(discriminator)
     l2_latents = losses.L2LatentsLoss()
-
+    wavlm_loss = losses.WavLMLoss(device=accel.device)
+    
     return State(
         generator=generator,
         optimizer_g=optimizer_g,
@@ -237,6 +239,7 @@ def load(
         mel_loss=mel_loss,
         gan_loss=gan_loss,
         l2_latents=l2_latents,
+        wavlm_loss=wavlm_loss,
         tracker=tracker,
         train_data=train_data,
         val_data=val_data,
@@ -254,12 +257,17 @@ def val_loop(batch, state, accel):
 
     out = state.generator(signal.audio_data, signal.sample_rate)
     recons = AudioSignal(out["audio"], signal.sample_rate)
-
+    
+    # Compute WavLM losses
+    wavlm_cosine_loss, wavlm_mse_loss = state.wavlm_loss(out["wavlm"], signal)
+    
     return {
         "loss": state.mel_loss(recons, signal),
         "mel/loss": state.mel_loss(recons, signal),
         "stft/loss": state.stft_loss(recons, signal),
         "waveform/loss": state.waveform_loss(recons, signal),
+        "wavlm/cosine_loss": wavlm_cosine_loss,
+        "wavlm/mse_loss": wavlm_mse_loss,
     }
 
 
@@ -296,6 +304,7 @@ def train_loop(state, batch, accel, lambdas):
         output["stft/loss"] = state.stft_loss(recons, signal)
         output["mel/loss"] = state.mel_loss(recons, signal)
         output["waveform/loss"] = state.waveform_loss(recons, signal)
+        output["wavlm/cosine_loss"], output["wavlm/mse_loss"] = state.wavlm_loss(out["wavlm"], signal)
         (
             output["adv/gen_loss"],
             output["adv/feat_loss"],

@@ -144,6 +144,29 @@ class Decoder(nn.Module):
         return self.model(x)
 
 
+class WavLMDecoder(nn.Module):
+    def __init__(
+        self,
+        input_channel,
+        channels,
+        d_out: int = 1024,
+    ):
+        super().__init__()
+
+        # Add final conv layer
+        layers = [
+            WNConv1d(input_channel, channels, kernel_size=7),
+            RMSNorm(channels),
+            Snake1d(channels),
+            WNConv1d(channels, d_out, kernel_size=7),
+        ]
+
+        self.model = nn.Sequential(*layers)
+
+    def forward(self, x):
+        return self.model(x)
+
+
 class DAC(BaseModel, CodecMixin):
     def __init__(
         self,
@@ -176,6 +199,10 @@ class DAC(BaseModel, CodecMixin):
             latent_dim,
             decoder_dim,
             decoder_rates,
+        )
+        self.wavlm_decoder = WavLMDecoder(
+            latent_dim,
+            decoder_dim,
         )
         self.sample_rate = sample_rate
         self.apply(init_weights)
@@ -277,6 +304,7 @@ class DAC(BaseModel, CodecMixin):
             "audio": x[..., :length],
             "z": z,
             "z_clean": z_clean,
+            "wavlm": self.wavlm_decoder(z),
         }
 
 

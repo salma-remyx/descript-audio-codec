@@ -3,9 +3,11 @@ from typing import List
 
 import torch
 import torch.nn.functional as F
+import torchaudio
 from audiotools import AudioSignal
 from audiotools import STFTParams
 from torch import nn
+from transformers import WavLMModel, AutoFeatureExtractor
 
 
 class L1Loss(nn.L1Loss):
@@ -376,10 +378,6 @@ class L2LatentsLoss(nn.Module):
     weight : float, optional
         Weight of this loss, defaults to 1.0
     """
-    def __init__(self, weight: float = 1.0):
-        super().__init__()
-        self.weight = weight
-
     def forward(self, latents: torch.Tensor):
         """Compute L2 penalty on latents.
         
@@ -394,4 +392,54 @@ class L2LatentsLoss(nn.Module):
             L2 penalty loss on latents
         """
         # Compute mean squared value across batch and time dimensions
-        return self.weight * torch.mean(torch.pow(latents, 2))
+        return torch.mean(torch.pow(latents, 2))
+
+
+class WavLMLoss(nn.Module):
+    """WavLM loss that returns both cosine and MSE losses between embeddings."""
+    def __init__(self, device, sample_rate: int = 44100):
+        super().__init__()
+        self.sample_rate = 16000
+        self.resampler = torchaudio.transforms.Resample(
+            orig_freq=sample_rate,
+            new_freq=self.sample_rate
+        ).to(device)
+        self.feature_extractor = AutoFeatureExtractor.from_pretrained("microsoft/wavlm-large")
+        self.wavlm_model = WavLMModel.from_pretrained("microsoft/wavlm-large").to(device)
+        self.wavlm_model.eval()  # Freeze the model
+        
+        
+    def forward(self, pred_embeddings: torch.Tensor, target_signal: AudioSignal) -> tuple[torch.Tensor, torch.Tensor]:
+        """Compute WavLM losses between predicted and target audio.
+        
+        Args:
+            pred_embeddings: Predicted WavLM embeddings from the model [B x 1024 x T]
+            target_signal: Target audio signal
+            
+        Returns:
+            Tuple of (cosine_loss, mse_loss)
+        """
+        with torch.no_grad():
+            # Process target audio through WavLM
+            inputs = self.feature_extractor(
+                self.resampler(target_signal.audio_data.squeeze(1)).cpu().numpy(),
+                sampling_rate=self.sample_rate,
+                return_tensors="pt"
+            ).to(pred_embeddings.device)
+            
+            # Get target embeddings
+            target_embeddings = self.wavlm_model(**inputs).last_hidden_state.transpose(1, 2)
+            
+            # Resample target embeddings if lengths don't match
+            if target_embeddings.shape[-1] != pred_embeddings.shape[-1]:
+                target_embeddings = F.interpolate(
+                    target_embeddings,
+                    size=pred_embeddings.shape[-1],
+                    mode="linear",
+                    align_corners=False
+                )
+        
+        return (
+            1 - F.cosine_similarity(pred_embeddings, target_embeddings, dim=1).mean(),
+            F.mse_loss(pred_embeddings, target_embeddings)
+        )
