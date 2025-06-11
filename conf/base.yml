@@ -2,7 +2,7 @@
 DAC.sample_rate: 44100
 DAC.encoder_dim: 64
 DAC.encoder_rates: [4, 8, 8, 8]
-# DAC.latent_dim: 64
+DAC.latent_dim: 64
 DAC.decoder_dim: 1536
 DAC.decoder_rates: [8, 8, 8, 4]
 DAC.latent_noise_max: 0.05  # Maximum standard deviation for noise injection during training
@@ -46,7 +46,7 @@ lambdas:
   adv/gen_loss: 1.0
   latents/loss: 0.1
   wavlm/cosine_loss: 50.0
-  wavlm/mse_loss: 2.0
+  wavlm/mse_loss: 5.0
 
 VolumeNorm.db: [const, -16]
 

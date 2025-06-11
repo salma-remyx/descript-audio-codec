@@ -449,7 +449,7 @@ def train(
         num_workers=num_workers,
         batch_size=val_batch_size,
         collate_fn=state.val_data.collate,
-        persistent_workers=True if num_workers > 0 else False,
+        persistent_workers=num_workers > 0,
     )
 
     # Wrap the functions so that they neatly track in wandb + progress bars
