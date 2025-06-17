@@ -31,7 +31,7 @@ def analyze_latent_perturbations(
     n_mels: int = 64,
     window_before: int = 5,
     window_after: int = 21,
-    max_batch_size: int = 128,
+    max_batch_size: int = 16,
 ):
     """Analyze how perturbations to DAC latents affect mel-spectrogram reconstruction.
     
