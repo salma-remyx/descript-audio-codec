@@ -44,17 +44,22 @@ def analyze_latent_perturbations(
         window_after (int): Number of frames after perturbation to consider
         max_batch_size (int): Maximum batch size for perturbation calculations
     """
+    # Device handling
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    
     # Hardcoded parameters
     perturbation_magnitudes = np.logspace(-2, 0, 100)  # 100 logarithmically spaced from 1e-3 to 1e0
     output_dir = audio_file.parent  # Same path as audio file
     
-    # Load model
+    # Load model and explicitly move to specified device
     model = DAC.load(model_path / "best/dac/weights.pth")
+    model.to(device)  # Explicitly move model to GPU
     model.eval()
     
     # Load and process audio
     signal = AudioSignal(audio_file)
-    signal.to(model.device)
+    signal.to(device)  # This uses the model's device
+    signal.audio_data = model.preprocess(signal.audio_data, signal.sample_rate)
     
     # Get original latents and reconstruction
     with torch.no_grad():
@@ -79,7 +84,7 @@ def analyze_latent_perturbations(
         latents_batch = latents_orig.repeat(len(batch_magnitudes), 1, 1)  # [batch_size, channels, time]
         
         # Create noise with different magnitudes for each batch element
-        latents_batch += torch.randn_like(latents_batch) * torch.tensor(batch_magnitudes, device=latents_batch.device).view(-1, 1, 1)
+        latents_batch += torch.randn_like(latents_batch) * torch.tensor(batch_magnitudes, device=device).view(-1, 1, 1)
         
         # Decode batch
         with torch.no_grad():
@@ -121,8 +126,8 @@ def analyze_latent_perturbations(
         latents_batch = latents_orig.repeat(len(batch_positions), 1, 1)  # [batch_size, channels, time]
         
         # Add perturbations at different positions for each batch element (vectorized)
-        latents_batch[torch.arange(len(batch_positions), device=latents_batch.device), :, torch.tensor(batch_positions, device=latents_batch.device)] += torch.randn(
-            len(batch_positions), latents_batch.shape[1], 1, device=latents_batch.device).squeeze(-1)
+        latents_batch[torch.arange(len(batch_positions), device=device), :, torch.tensor(batch_positions, device=device)] += torch.randn(
+            len(batch_positions), latents_batch.shape[1], 1, device=device).squeeze(-1)
         
         # Decode batch
         with torch.no_grad():
