@@ -68,42 +68,42 @@ def analyze_latent_perturbations(
     
     error_recons = compute_mcd(mel_orig, mel_recons)
     
-    # Process perturbations in batches to respect max_batch_size
-    # smoothness_errors = []
+    Process perturbations in batches to respect max_batch_size
+    smoothness_errors = []
     
-    # for start_idx in tqdm(range(0, len(perturbation_magnitudes), max_batch_size), desc="Smoothness"):
-    #     end_idx = min(start_idx + max_batch_size, len(perturbation_magnitudes))
-    #     batch_magnitudes = perturbation_magnitudes[start_idx:end_idx]
+    for start_idx in tqdm(range(0, len(perturbation_magnitudes), max_batch_size), desc="Smoothness"):
+        end_idx = min(start_idx + max_batch_size, len(perturbation_magnitudes))
+        batch_magnitudes = perturbation_magnitudes[start_idx:end_idx]
         
-    #     # Create batch of perturbations
-    #     latents_batch = latents_orig.repeat(len(batch_magnitudes), 1, 1)  # [batch_size, channels, time]
+        # Create batch of perturbations
+        latents_batch = latents_orig.repeat(len(batch_magnitudes), 1, 1)  # [batch_size, channels, time]
         
-    #     # Create noise with different magnitudes for each batch element
-    #     latents_batch += torch.randn_like(latents_batch) * torch.tensor(batch_magnitudes, device=latents_batch.device).view(-1, 1, 1)
+        # Create noise with different magnitudes for each batch element
+        latents_batch += torch.randn_like(latents_batch) * torch.tensor(batch_magnitudes, device=latents_batch.device).view(-1, 1, 1)
         
-    #     # Decode batch
-    #     with torch.no_grad():
-    #         audio_batch = model.decode(latents_batch)
+        # Decode batch
+        with torch.no_grad():
+            audio_batch = model.decode(latents_batch)
         
-    #     # Compute mel spectrograms and MCDs for this batch
-    #     for i in range(len(batch_magnitudes)):
-    #         mel_pert = AudioSignal(
-    #             audio_batch[i:i+1], sample_rate=signal.sample_rate).mel_spectrogram(
-    #                 n_mels=n_mels, window_length=hop_length, hop_length=hop_length).squeeze().cpu().numpy()
-    #         smoothness_errors.append(compute_mcd(mel_orig, mel_pert))
+        # Compute mel spectrograms and MCDs for this batch
+        for i in range(len(batch_magnitudes)):
+            mel_pert = AudioSignal(
+                audio_batch[i:i+1], sample_rate=signal.sample_rate).mel_spectrogram(
+                    n_mels=n_mels, window_length=hop_length, hop_length=hop_length).squeeze().cpu().numpy()
+            smoothness_errors.append(compute_mcd(mel_orig, mel_pert))
     
-    # # Plot smoothness analysis
-    # plt.figure()
-    # plt.semilogx(perturbation_magnitudes, smoothness_errors, 'b-', label='Perturbations')
-    # plt.axhline(error_recons, color='r', linestyle='--', label=f'Reconstruction MCD: {error_recons:.0f}dB')
-    # plt.xlabel('Perturbation')
-    # plt.ylabel('MCD [dB]')
-    # plt.xlim(min(perturbation_magnitudes), max(perturbation_magnitudes))
-    # plt.legend()
-    # plt.grid(True, alpha=0.3)
-    # plt.tight_layout()
-    # plt.savefig(output_dir / f"smoothness_analysis_{model_path.name}.svg")
-    # plt.close()
+    # Plot smoothness analysis
+    plt.figure()
+    plt.semilogx(perturbation_magnitudes, smoothness_errors, 'b-', label='Perturbations')
+    plt.axhline(error_recons, color='r', linestyle='--', label=f'Reconstruction MCD: {error_recons:.0f}dB')
+    plt.xlabel('Perturbation')
+    plt.ylabel('MCD [dB]')
+    plt.xlim(min(perturbation_magnitudes), max(perturbation_magnitudes))
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.savefig(output_dir / f"smoothness_analysis_{model_path.name}.svg")
+    plt.close()
     
     # Collect MCD measurements for each relative frame distance
     relative_distances = list(range(-window_before, window_after + 1))
