@@ -68,7 +68,7 @@ def analyze_latent_perturbations(
     
     error_recons = compute_mcd(mel_orig, mel_recons)
     
-    Process perturbations in batches to respect max_batch_size
+    # Process perturbations in batches to respect max_batch_size
     smoothness_errors = []
     
     for start_idx in tqdm(range(0, len(perturbation_magnitudes), max_batch_size), desc="Smoothness"):
