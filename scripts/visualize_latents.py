@@ -11,8 +11,9 @@ from sklearn.decomposition import PCA
 def visualize(
     audio_file: Path = Path(""),
     model_path: Path = Path(""),
+    n_components: int = 64,
 ):
-    """Visualize mel spectrogram and first 64 PCA components of DAC latents for an audio file.
+    """Visualize mel spectrogram and first n_components PCA components of DAC latents for an audio file.
     
     Args:
         audio_file (Path): Path to input audio file
@@ -31,13 +32,13 @@ def visualize(
         latents = model.encode(signal.audio_data)
     
     # Compute mel spectrogram
-    mel_spec = signal.mel_spectrogram(n_mels=64, window_length=4096, hop_length=2048).squeeze().cpu().numpy()
+    mel_spec = signal.mel_spectrogram(n_mels=n_components, window_length=4096, hop_length=2048).squeeze().cpu().numpy()
     
     # Perform PCA on latents
     latents = latents.squeeze().cpu().numpy()  # [n_frames, n_dims]
-    pca = PCA(n_components=64)
-    latents_pca = pca.fit_transform(latents.T).T  # [64, n_frames]
-    
+    pca = PCA(n_components=n_components)
+    latents_pca = pca.fit_transform(latents.T).T  # [n_components, n_frames]
+
     # Create figure with two subplots
     _, (ax1, ax2) = plt.subplots(2, 1, sharex=True)
     
