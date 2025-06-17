@@ -102,7 +102,7 @@ def analyze_latent_perturbations(
     plt.legend()
     plt.grid(True, alpha=0.3)
     plt.tight_layout()
-    plt.savefig(output_dir / f"smoothness_analysis_{model_path.name}.svg")
+    plt.savefig(output_dir / f"smoothness_{model_path.name}.svg")
     plt.close()
     
     # Collect MCD measurements for each relative frame distance
@@ -156,7 +156,7 @@ def analyze_latent_perturbations(
     plt.legend()
     plt.grid(True, alpha=0.3)
     plt.tight_layout()
-    plt.savefig(output_dir / f"temporal_locality_curve_{model_path.name}.svg")
+    plt.savefig(output_dir / f"locality_{model_path.name}.svg")
     plt.close()
 
 
