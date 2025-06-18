@@ -12,12 +12,15 @@ def visualize(
     audio_file: Path = Path(""),
     model_path: Path = Path(""),
     n_components: int = 64,
+    pca: bool = False,
 ):
     """Visualize mel spectrogram and first n_components PCA components of DAC latents for an audio file.
     
     Args:
         audio_file (Path): Path to input audio file
         model_path (Path): Path to model checkpoint file
+        n_components (int): Number of PCA components to visualize
+        pca (bool): Whether to perform PCA on latents
     """
     # Load model
     model = DAC.load(model_path / "best/dac/weights.pth")
@@ -36,8 +39,9 @@ def visualize(
     
     # Perform PCA on latents
     latents = latents.squeeze().cpu().numpy()  # [n_frames, n_dims]
-    pca = PCA(n_components=n_components)
-    latents_pca = pca.fit_transform(latents.T).T  # [n_components, n_frames]
+    if pca:
+        pca = PCA(n_components=n_components)
+        latents = pca.fit_transform(latents.T).T  # [n_components, n_frames]
 
     # Create figure with two subplots
     _, (ax1, ax2) = plt.subplots(2, 1, sharex=True)
@@ -52,15 +56,15 @@ def visualize(
     
     # Plot PCA components
     ax2.imshow(
-        latents_pca,
+        latents,
         aspect='auto',
         origin='lower',
-        extent=[0, signal.signal_duration, 0, latents_pca.shape[0]]
+        extent=[0, signal.signal_duration, 0, latents.shape[0]]
     )
     ax2.set_xlabel('Time (s)')
     
     plt.tight_layout()
-    plt.savefig(audio_file.with_suffix('.svg'), format='svg')
+    plt.savefig(audio_file.parent / f"latents_{model_path.name}{'_pca' if pca else ''}.svg", format='svg')
     plt.close()
 
 if __name__ == "__main__":
