@@ -72,8 +72,6 @@ def analyze_latent_perturbations(
 
     # Compute covariance matrix
     cov_matrix = np.cov(latents_orig.squeeze(0).cpu().numpy())
-    cov_max = np.max(np.abs(cov_matrix))
-
 
     # Compute square root of covariance matrix for generating correlated noise
     eigenvals, eigenvecs = np.linalg.eigh(cov_matrix)
@@ -82,7 +80,7 @@ def analyze_latent_perturbations(
     
     # Plot covariance matrix
     plt.figure()
-    plt.imshow(cov_matrix, cmap='RdBu_r', vmin=-cov_max, vmax=cov_max)
+    plt.imshow(cov_matrix, cmap='RdBu_r', vmin=-1, vmax=1)
     plt.colorbar(label='Covariance')
     plt.title(f'Latent Covariance Matrix\nCondition Number: {np.max(eigenvals) / (np.min(eigenvals) + 1e-10):.1e}')
     plt.tight_layout()
