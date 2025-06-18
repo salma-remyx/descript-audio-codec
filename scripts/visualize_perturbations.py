@@ -48,7 +48,6 @@ def analyze_latent_perturbations(
     device = "cuda" if torch.cuda.is_available() else "cpu"
     
     # Hardcoded parameters
-    perturbation_magnitudes = np.logspace(-2, 0, 100)  # 100 logarithmically spaced from 1e-3 to 1e0
     output_dir = audio_file.parent  # Same path as audio file
     
     # Load model and explicitly move to specified device
@@ -66,13 +65,16 @@ def analyze_latent_perturbations(
         latents_orig = model.encode(signal.audio_data)
         mel_recons = AudioSignal(model.decode(latents_orig), sample_rate=signal.sample_rate).mel_spectrogram(
             n_mels=n_mels, window_length=hop_length, hop_length=hop_length).squeeze().cpu().numpy()
-    
+
     # Compute original and reconstructed mel spectrograms
     mel_orig = signal.mel_spectrogram(
         n_mels=n_mels, window_length=hop_length, hop_length=hop_length).squeeze().cpu().numpy()
     
     error_recons = compute_mcd(mel_orig, mel_recons)
     
+    latents_std = latents_orig.std().item()
+    perturbation_magnitudes = latents_std * np.logspace(-2, 0, 100)  # 100 logarithmically spaced from 1e-3 to 1e0
+
     # Process perturbations in batches to respect max_batch_size
     smoothness_errors = []
     
@@ -126,7 +128,7 @@ def analyze_latent_perturbations(
         latents_batch = latents_orig.repeat(len(batch_positions), 1, 1)  # [batch_size, channels, time]
         
         # Add perturbations at different positions for each batch element (vectorized)
-        latents_batch[torch.arange(len(batch_positions), device=device), :, torch.tensor(batch_positions, device=device)] += torch.randn(
+        latents_batch[torch.arange(len(batch_positions), device=device), :, torch.tensor(batch_positions, device=device)] += latents_std * torch.randn(
             len(batch_positions), latents_batch.shape[1], 1, device=device).squeeze(-1)
         
         # Decode batch
