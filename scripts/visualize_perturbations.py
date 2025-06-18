@@ -59,21 +59,37 @@ def analyze_latent_perturbations(
     signal = AudioSignal(audio_file)
     signal.to(device)  # This uses the model's device
     signal.audio_data = model.preprocess(signal.audio_data, signal.sample_rate)
+    mel_orig = signal.mel_spectrogram(
+        n_mels=n_mels, window_length=hop_length, hop_length=hop_length).squeeze().cpu().numpy()
     
     # Get original latents and reconstruction
     with torch.no_grad():
         latents_orig = model.encode(signal.audio_data)
         mel_recons = AudioSignal(model.decode(latents_orig), sample_rate=signal.sample_rate).mel_spectrogram(
             n_mels=n_mels, window_length=hop_length, hop_length=hop_length).squeeze().cpu().numpy()
-
-    # Compute original and reconstructed mel spectrograms
-    mel_orig = signal.mel_spectrogram(
-        n_mels=n_mels, window_length=hop_length, hop_length=hop_length).squeeze().cpu().numpy()
     
     error_recons = compute_mcd(mel_orig, mel_recons)
+
+    # Compute covariance matrix
+    cov_matrix = np.cov(latents_orig.squeeze(0).cpu().numpy())
+    cov_max = np.max(np.abs(cov_matrix))
+
+
+    # Compute square root of covariance matrix for generating correlated noise
+    eigenvals, eigenvecs = np.linalg.eigh(cov_matrix)
+    eigenvals = np.maximum(eigenvals.real, 0)  # Avoid negative eigenvalues
+    cov_sqrt = torch.tensor(eigenvecs @ np.diag(np.sqrt(eigenvals)), device=device, dtype=torch.float32)
     
-    latents_std = latents_orig.std().item()
-    perturbation_magnitudes = latents_std * np.logspace(-2, 0, 100)  # 100 logarithmically spaced from 1e-3 to 1e0
+    # Plot covariance matrix
+    plt.figure()
+    plt.imshow(cov_matrix, cmap='RdBu_r', vmin=-cov_max, vmax=cov_max)
+    plt.colorbar(label='Covariance')
+    plt.title(f'Latent Covariance Matrix\nCondition Number: {np.max(eigenvals) / (np.min(eigenvals) + 1e-10):.1e}')
+    plt.tight_layout()
+    plt.savefig(output_dir / f"covariance_{model_path.name}.svg")
+    plt.close()
+
+    perturbation_magnitudes = np.logspace(-2, 0, 100)  # 100 logarithmically spaced from 1e-3 to 1e0
 
     # Process perturbations in batches to respect max_batch_size
     smoothness_errors = []
@@ -84,9 +100,11 @@ def analyze_latent_perturbations(
         
         # Create batch of perturbations
         latents_batch = latents_orig.repeat(len(batch_magnitudes), 1, 1)  # [batch_size, channels, time]
-        
-        # Create noise with different magnitudes for each batch element
-        latents_batch += torch.randn_like(latents_batch) * torch.tensor(batch_magnitudes, device=device).view(-1, 1, 1)
+
+        # Scale by magnitudes and add to latents
+        latents_batch += torch.einsum(
+            'ij,bjk->bik', cov_sqrt, torch.randn(len(batch_magnitudes), latents_batch.shape[1], latents_batch.shape[2], device=device)) * torch.tensor(
+                batch_magnitudes, device=device).view(-1, 1, 1)
         
         # Decode batch
         with torch.no_grad():
@@ -126,10 +144,10 @@ def analyze_latent_perturbations(
         
         # Create batch of perturbed latents
         latents_batch = latents_orig.repeat(len(batch_positions), 1, 1)  # [batch_size, channels, time]
-        
-        # Add perturbations at different positions for each batch element (vectorized)
-        latents_batch[torch.arange(len(batch_positions), device=device), :, torch.tensor(batch_positions, device=device)] += latents_std * torch.randn(
-            len(batch_positions), latents_batch.shape[1], 1, device=device).squeeze(-1)
+
+        # Use advanced indexing to add noise at different positions for each batch element
+        latents_batch[torch.arange(len(batch_positions), device=device), :, torch.tensor(batch_positions, device=device)] += torch.einsum(
+            'ij,bj->bi', cov_sqrt, torch.randn(len(batch_positions), latents_batch.shape[1], device=device))
         
         # Decode batch
         with torch.no_grad():
