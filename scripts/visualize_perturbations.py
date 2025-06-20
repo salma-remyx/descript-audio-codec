@@ -77,10 +77,12 @@ def analyze_latent_perturbations(
     eigenvals, eigenvecs = np.linalg.eigh(cov_matrix)
     eigenvals = np.maximum(eigenvals.real, 0)  # Avoid negative eigenvalues
     cov_sqrt = torch.tensor(eigenvecs @ np.diag(np.sqrt(eigenvals)), device=device, dtype=torch.float32)
+    # Use median of diagonal (typical variance) for fair comparison across models
+    median_diag = np.median(np.diag(cov_matrix))
     
     # Plot covariance matrix
     plt.figure()
-    plt.imshow(cov_matrix, cmap='RdBu_r', vmin=-1, vmax=1)
+    plt.imshow(cov_matrix, cmap='RdBu_r', vmin=-median_diag, vmax=median_diag)
     plt.colorbar(label='Covariance')
     plt.title(f'Latent Covariance Matrix\nCondition Number: {np.max(eigenvals) / (np.min(eigenvals) + 1e-10):.1e}')
     plt.tight_layout()
