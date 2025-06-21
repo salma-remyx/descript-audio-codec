@@ -32,6 +32,7 @@ def analyze_latent_perturbations(
     window_before: int = 5,
     window_after: int = 21,
     max_batch_size: int = 16,
+    sample_perturbations: str = "",
 ):
     """Analyze how perturbations to DAC latents affect mel-spectrogram reconstruction.
     
@@ -43,12 +44,16 @@ def analyze_latent_perturbations(
         window_before (int): Number of frames before perturbation to consider
         window_after (int): Number of frames after perturbation to consider
         max_batch_size (int): Maximum batch size for perturbation calculations
+        sample_perturbations (str): Comma-separated list of perturbation magnitudes to save audio samples for
     """
     # Device handling
     device = "cuda" if torch.cuda.is_available() else "cpu"
     
     # Hardcoded parameters
     output_dir = audio_file.parent  # Same path as audio file
+    
+    # Parse sample perturbations
+    sample_magnitudes = [float(x.strip()) for x in sample_perturbations.split(',')] if sample_perturbations.strip() else []
     
     # Load model and explicitly move to specified device
     model = DAC.load(model_path / "best/dac/weights.pth")
@@ -129,6 +134,28 @@ def analyze_latent_perturbations(
     plt.tight_layout()
     plt.savefig(output_dir / f"smoothness_{model_path.name}.svg")
     plt.close()
+    
+    # Process sample magnitudes in batches
+    for start_idx in tqdm(range(0, len(sample_magnitudes), max_batch_size), desc="Audio Sampling"):
+        end_idx = min(start_idx + max_batch_size, len(sample_magnitudes))
+        batch_magnitudes = sample_magnitudes[start_idx:end_idx]
+        
+        # Create batch of perturbations
+        latents_batch = latents_orig.repeat(len(batch_magnitudes), 1, 1)  # [batch_size, channels, time]
+
+        # Scale by magnitudes and add to latents
+        latents_batch += torch.einsum(
+            'ij,bjk->bik', cov_sqrt, torch.randn(len(batch_magnitudes), latents_batch.shape[1], latents_batch.shape[2], device=device)) * torch.tensor(
+                batch_magnitudes, device=device).view(-1, 1, 1)
+        
+        # Decode batch
+        with torch.no_grad():
+            audio_batch = model.decode(latents_batch)
+        
+        # Save individual audio files from batch
+        for i in range(len(batch_magnitudes)):
+            perturbed_audio = AudioSignal(audio_batch[i:i+1].cpu(), sample_rate=signal.sample_rate)
+            perturbed_audio.write(output_dir / f"{audio_file.stem}_{model_path.name}_{i}.wav")
     
     # Collect MCD measurements for each relative frame distance
     relative_distances = list(range(-window_before, window_after + 1))
