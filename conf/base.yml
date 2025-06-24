@@ -1,10 +1,10 @@
 # Model setup
 DAC.sample_rate: 44100
 DAC.encoder_dim: 4
-DAC.encoder_rates: [2, 2, 2, 2, 2, 2, 2, 2, 2, 2]
-DAC.latent_dim: 32
-DAC.decoder_dim: 4096
-DAC.decoder_rates: [2, 2, 2, 2, 2, 2, 2, 2, 2, 2]
+DAC.encoder_rates: [2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2]
+DAC.latent_dim: 64
+DAC.decoder_dim: 8192
+DAC.decoder_rates: [2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2]
 DAC.latent_noise_max: 0.05  # Maximum standard deviation for noise injection during training
 
 # Quantization
@@ -101,12 +101,27 @@ train/build_dataset.folders:
     - /data/shared_data/raw/german_speech/
     - /data/shared_data/raw/russian_speech/
     - /data/shared_data/raw/spanish_speech/
+  music_hq:
+    - /data/musdb18hq/train
+  music_uq:
+    - /data/shared_data/raw/mtg-jamendo
+  general:
+    - /data/audioset/audios/unbalanced_train_segments/
+    - /data/audioset/audios/balanced_train_segments/
 
 val/build_dataset.folders:
   speech_hq:
     - /data/shared_data/raw/daps/val
+  music_hq:
+    - /data/musdb18hq/test
+  general:
+    - /data/audioset/audios/eval_segments/
 
 test/build_dataset.folders:
   speech_hq:
     - /data/shared_data/raw/daps/test
+  music_hq:
+    - /data/musdb18hq/test
+  general:
+    - /data/audioset/audios/eval_segments/
 

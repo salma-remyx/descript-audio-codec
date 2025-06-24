@@ -21,38 +21,48 @@ class RMSNorm(nn.Module):
         return self.scale * x * torch.rsqrt(x.pow(2).mean(dim=1, keepdim=True) + self.eps)
 
 
-class CausalConv1d(nn.Module):
+class PaddedConv1d(nn.Module):
     def __init__(self, *args, **kwargs):
         super().__init__()
-        self.padding_left = (kwargs.get('kernel_size', 1) - 1) * kwargs.get('dilation', 1) - kwargs.get('stride', 1) + 1
         kwargs.pop('padding', None)
+        causal = kwargs.pop('causal', False)
+        padding = (kwargs.get('kernel_size', 1) - 1) * kwargs.get('dilation', 1) - kwargs.get('stride', 1) + 1
+        self.padding = (
+            padding if causal else padding // 2,
+            0 if causal else padding // 2
+        )
         self.conv = weight_norm(nn.Conv1d(*args, **kwargs))
         
     def forward(self, x):
         # Pad only at the beginning
-        x = F.pad(x, (self.padding_left, 0))
+        x = F.pad(x, self.padding)
         return self.conv(x)
 
-class CausalConvTranspose1d(nn.Module):
+class PaddedConvTranspose1d(nn.Module):
     def __init__(self, *args, **kwargs):
         super().__init__()
         kwargs.pop('padding', None)
+        causal = kwargs.pop('causal', False)
+        padding = (kwargs.get('kernel_size', 1) - 1) * kwargs.get('dilation', 1) - kwargs.get('stride', 1) + 1
+        self.padding = (
+            0 if causal else padding // 2,
+            padding if causal else padding // 2
+        )
         self.conv = weight_norm(nn.ConvTranspose1d(*args, **kwargs))
-        self.padding_right = (kwargs.get('kernel_size', 1) - 1) * kwargs.get('dilation', 1) - kwargs.get('stride', 1) + 1
         
     def forward(self, x):
         # Run the transposed convolution
         x = self.conv(x)
         # Drop the last samples
-        if self.padding_right > 0:
-            x = x[..., :-self.padding_right]
+        if self.padding[1] > 0:
+            x = x[..., self.padding[0]:-self.padding[1]]
         return x
 
 def WNConv1d(*args, **kwargs):
-    return CausalConv1d(*args, **kwargs)
+    return PaddedConv1d(*args, **kwargs)
 
 def WNConvTranspose1d(*args, **kwargs):
-    return CausalConvTranspose1d(*args, **kwargs)
+    return PaddedConvTranspose1d(*args, **kwargs)
 
 # Scripting this brings model speed up 1.4x
 @torch.jit.script
