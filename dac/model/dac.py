@@ -26,7 +26,7 @@ class ResidualUnit(nn.Module):
         self.block = nn.Sequential(
             RMSNorm(dim),
             Snake1d(dim),
-            WNConv1d(dim, dim, kernel_size=7, dilation=dilation),
+            WNConv1d(dim, dim, kernel_size=2, dilation=dilation),
             RMSNorm(dim),
             Snake1d(dim),
             WNConv1d(dim, dim, kernel_size=1),
@@ -44,12 +44,10 @@ class EncoderBlock(nn.Module):
     def __init__(self, dim: int = 16, stride: int = 1):
         super().__init__()
         self.block = nn.Sequential(
-            ResidualUnit(dim // 2, dilation=1),
-            ResidualUnit(dim // 2, dilation=3),
-            ResidualUnit(dim // 2, dilation=9),
-            Snake1d(dim // 2),
+            ResidualUnit(dim // stride, dilation=1),
+            Snake1d(dim // stride),
             WNConv1d(
-                dim // 2,
+                dim // stride,
                 dim,
                 kernel_size=2 * stride,
                 stride=stride,
@@ -69,18 +67,18 @@ class Encoder(nn.Module):
     ):
         super().__init__()
         # Create first convolution
-        self.block = [WNConv1d(1, d_model, kernel_size=7)]
+        self.block = [WNConv1d(1, d_model, kernel_size=2)]
 
         # Create EncoderBlocks that double channels as they downsample by `stride`
         for stride in strides:
-            d_model *= 2
+            d_model *= stride
             self.block += [EncoderBlock(d_model, stride=stride)]
 
         # Create last convolution
         self.block += [
             RMSNorm(d_model),
             Snake1d(d_model),
-            WNConv1d(d_model, d_latent, kernel_size=3),
+            WNConv1d(d_model, d_latent, kernel_size=2),
         ]
 
         # Wrap black into nn.Sequential
@@ -103,8 +101,6 @@ class DecoderBlock(nn.Module):
                 stride=stride,
             ),
             ResidualUnit(output_dim, dilation=1),
-            ResidualUnit(output_dim, dilation=3),
-            ResidualUnit(output_dim, dilation=9),
         )
 
     def forward(self, x):
@@ -122,19 +118,20 @@ class Decoder(nn.Module):
         super().__init__()
 
         # Add first conv layer
-        layers = [WNConv1d(input_channel, channels, kernel_size=7)]
+        layers = [WNConv1d(input_channel, channels, kernel_size=2)]
 
         # Add upsampling + MRF blocks
-        for i, stride in enumerate(rates):
-            input_dim = channels // 2**i
-            output_dim = channels // 2 ** (i + 1)
+        input_dim = channels
+        for stride in rates:
+            output_dim = input_dim // stride
             layers += [DecoderBlock(input_dim, output_dim, stride)]
+            input_dim = output_dim
 
         # Add final conv layer
         layers += [
             RMSNorm(output_dim),
             Snake1d(output_dim),
-            WNConv1d(output_dim, d_out, kernel_size=7),
+            WNConv1d(output_dim, d_out, kernel_size=2),
             nn.Tanh(),
         ]
 
@@ -155,10 +152,10 @@ class WavLMDecoder(nn.Module):
 
         # Add final conv layer
         layers = [
-            WNConv1d(input_channel, channels, kernel_size=7),
+            WNConv1d(input_channel, channels, kernel_size=2),
             RMSNorm(channels),
             Snake1d(channels),
-            WNConv1d(channels, d_out, kernel_size=7),
+            WNConv1d(channels, d_out, kernel_size=2),
         ]
 
         self.model = nn.Sequential(*layers)
