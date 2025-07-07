@@ -65,16 +65,12 @@ def analyze_latent_perturbations(
     signal = AudioSignal(audio_file)
     signal.to(device)  # This uses the model's device
     signal.audio_data = model.preprocess(signal.audio_data, signal.sample_rate)
-    mel_orig = signal.mel_spectrogram(
-        n_mels=n_mels, window_length=hop_length, hop_length=hop_length).squeeze().cpu().numpy()
     
     # Get original latents and reconstruction
     with torch.no_grad():
         latents_orig = model.encode(signal.audio_data)
         mel_recons = AudioSignal(model.decode(latents_orig), sample_rate=signal.sample_rate).mel_spectrogram(
             n_mels=n_mels, window_length=hop_length, hop_length=hop_length).squeeze().cpu().numpy()
-    
-    error_recons = compute_mcd(mel_orig, mel_recons)
 
     # Compute covariance matrix
     cov_matrix = np.cov(latents_orig.squeeze(0).cpu().numpy())
@@ -120,16 +116,14 @@ def analyze_latent_perturbations(
             mel_pert = AudioSignal(
                 audio_batch[i:i+1], sample_rate=signal.sample_rate).mel_spectrogram(
                     n_mels=n_mels, window_length=hop_length, hop_length=hop_length).squeeze().cpu().numpy()
-            smoothness_errors.append(compute_mcd(mel_orig, mel_pert))
+            smoothness_errors.append(compute_mcd(mel_recons, mel_pert))
     
     # Plot smoothness analysis
     plt.figure()
     plt.semilogx(perturbation_magnitudes, smoothness_errors, 'b-', label='Perturbations')
-    plt.axhline(error_recons, color='r', linestyle='--', label=f'Reconstruction MCD: {error_recons:.0f}dB')
     plt.xlabel('Perturbation')
     plt.ylabel('MCD [dB]')
     plt.xlim(min(perturbation_magnitudes), max(perturbation_magnitudes))
-    plt.legend()
     plt.grid(True, alpha=0.3)
     plt.tight_layout()
     plt.savefig(output_dir / f"smoothness_{model_path.name}.svg")
@@ -190,7 +184,7 @@ def analyze_latent_perturbations(
             for j, rel_dist in enumerate(relative_distances):
                 mel_frame_idx = pos + rel_dist
                 
-                mcds[j] += compute_mcd(mel_orig[:, mel_frame_idx:mel_frame_idx+1],
+                mcds[j] += compute_mcd(mel_recons[:, mel_frame_idx:mel_frame_idx+1],
                                        mel_pert[:, mel_frame_idx:mel_frame_idx+1])
     
     # Calculate mean MCD for each relative distance
@@ -201,11 +195,9 @@ def analyze_latent_perturbations(
     # Plot temporal locality
     plt.figure()
     plt.plot(relative_times, mcds, 'bo-', label='Perturbations')
-    plt.axhline(error_recons, color='r', linestyle='--', label=f'Reconstruction MCD: {error_recons:.0f}dB')
     plt.xlabel('Time from Perturbation [s]')
     plt.ylabel('MCD [dB]')
     plt.xlim(min(relative_times), max(relative_times))
-    plt.legend()
     plt.grid(True, alpha=0.3)
     plt.tight_layout()
     plt.savefig(output_dir / f"locality_{model_path.name}.svg")

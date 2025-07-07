@@ -45,8 +45,8 @@ class PaddedConvTranspose1d(nn.Module):
         causal = kwargs.pop('causal', False)
         padding = (kwargs.get('kernel_size', 1) - 1) * kwargs.get('dilation', 1) - kwargs.get('stride', 1) + 1
         self.padding = (
-            0 if causal else padding // 2,
-            padding if causal else padding // 2
+            padding if causal else padding // 2,
+            0 if causal else padding // 2
         )
         self.conv = weight_norm(nn.ConvTranspose1d(*args, **kwargs))
         
@@ -54,9 +54,7 @@ class PaddedConvTranspose1d(nn.Module):
         # Run the transposed convolution
         x = self.conv(x)
         # Drop the last samples
-        if self.padding[1] > 0:
-            x = x[..., self.padding[0]:-self.padding[1]]
-        return x
+        return x[..., self.padding[0]:-self.padding[1]] if self.padding[1] > 0 else x[..., self.padding[0]:]
 
 def WNConv1d(*args, **kwargs):
     return PaddedConv1d(*args, **kwargs)
