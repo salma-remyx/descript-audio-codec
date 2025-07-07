@@ -6,6 +6,7 @@ DAC.latent_dim: 64
 DAC.decoder_dim: 8192
 DAC.decoder_rates: [2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2]
 DAC.latent_noise_max: 0.05  # Maximum standard deviation for noise injection during training
+DAC.causal: true
 
 # Quantization
 DAC.n_codebooks: 9

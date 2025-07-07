@@ -18,9 +18,10 @@ def compute_mcd(mel_spec1, mel_spec2):
     Returns:
         MCD value in dB
     """
+    min_length = min(mel_spec1.shape[-1], mel_spec2.shape[-1])
     return (10 / np.log(10)) * np.mean(np.sqrt(2 * np.sum((
-        dct(np.log(mel_spec1 + 1e-8), axis=0, norm='ortho') -
-        dct(np.log(mel_spec2 + 1e-8), axis=0, norm='ortho'))**2, axis=0)))
+        dct(np.log(mel_spec1[..., :min_length] + 1e-8), axis=0, norm='ortho') -
+        dct(np.log(mel_spec2[..., :min_length] + 1e-8), axis=0, norm='ortho'))**2, axis=0)))
 
 
 @argbind.bind(without_prefix=True)
