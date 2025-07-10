@@ -5,7 +5,7 @@ DAC.encoder_rates: [2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2]
 DAC.latent_dim: 64
 DAC.decoder_dim: 8192
 DAC.decoder_rates: [2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2]
-DAC.latent_noise_max: 0.05  # Maximum standard deviation for noise injection during training
+DAC.latent_noise_max: 0.1  # Maximum standard deviation for noise injection during training
 DAC.causal: true
 
 # Quantization
@@ -18,7 +18,7 @@ DAC.quantizer_dropout: 1.0
 Discriminator.sample_rate: 44100
 Discriminator.rates: []
 Discriminator.periods: [2, 3, 5, 7, 11]
-Discriminator.fft_sizes: [2048, 1024, 512]
+Discriminator.fft_sizes: [4096, 2048, 1024, 512]
 Discriminator.bands:
   - [0.0, 0.1]
   - [0.1, 0.25]
@@ -42,12 +42,14 @@ num_workers: 32
 val_idx: [0, 1, 2, 3, 4, 5, 6, 7]
 seed: 0
 lambdas:
-  mel/loss: 15.0
-  adv/feat_loss: 2.0
-  adv/gen_loss: 1.0
+  mel/loss: 1.0
+  stft/loss: 0.1
+  waveform/loss: 10.0
+  adv/feat_loss: 0.1
+  adv/gen_loss: 0.1
   latents/loss: 0.1
-  wavlm/cosine_loss: 50.0
-  wavlm/mse_loss: 10.0
+  wavlm/cosine_loss: 10.0
+  wavlm/mse_loss: 100.0
 
 VolumeNorm.db: [const, -16]
 
@@ -63,11 +65,11 @@ build_transform.postprocess:
   - ShiftPhase
 
 # Loss setup
-MultiScaleSTFTLoss.window_lengths: [2048, 512]
+MultiScaleSTFTLoss.window_lengths: [4096, 2048, 1024, 512]
 MelSpectrogramLoss.n_mels: [5, 10, 20, 40, 80, 160, 320]
-MelSpectrogramLoss.window_lengths: [32, 64, 128, 256, 512, 1024, 2048]
-MelSpectrogramLoss.mel_fmin: [0, 0, 0, 0, 0, 0, 0]
-MelSpectrogramLoss.mel_fmax: [null, null, null, null, null, null, null]
+MelSpectrogramLoss.window_lengths: [32, 64, 128, 256, 512, 1024, 2048, 4096]
+MelSpectrogramLoss.mel_fmin: [0, 0, 0, 0, 0, 0, 0, 0]
+MelSpectrogramLoss.mel_fmax: [null, null, null, null, null, null, null, null]
 MelSpectrogramLoss.pow: 1.0
 MelSpectrogramLoss.clamp_eps: 1.0e-5
 MelSpectrogramLoss.mag_weight: 0.0
