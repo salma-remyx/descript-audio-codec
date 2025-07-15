@@ -7,6 +7,7 @@ DAC.decoder_dim: 8192
 DAC.decoder_rates: [2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2]
 DAC.latent_noise_max: 0.1  # Maximum standard deviation for noise injection during training
 DAC.causal: true
+DAC.use_rmsnorm: true
 
 # Quantization
 DAC.n_codebooks: 9
@@ -18,7 +19,7 @@ DAC.quantizer_dropout: 1.0
 Discriminator.sample_rate: 44100
 Discriminator.rates: []
 Discriminator.periods: [2, 3, 5, 7, 11]
-Discriminator.fft_sizes: [4096, 2048, 1024, 512]
+Discriminator.fft_sizes: [8192, 4096, 2048, 1024, 512]
 Discriminator.bands:
   - [0.0, 0.1]
   - [0.1, 0.25]
@@ -30,6 +31,7 @@ Discriminator.bands:
 AdamW.betas: [0.8, 0.99]
 AdamW.lr: 0.0001
 ExponentialLR.gamma: 0.999996
+Accelerator.gradient_accumulation_steps: 1
 
 amp: false
 val_batch_size: 100
@@ -65,9 +67,9 @@ build_transform.postprocess:
   - ShiftPhase
 
 # Loss setup
-MultiScaleSTFTLoss.window_lengths: [4096, 2048, 1024, 512]
+MultiScaleSTFTLoss.window_lengths: [8192, 4096, 2048, 1024, 512]
 MelSpectrogramLoss.n_mels: [5, 10, 20, 40, 80, 160, 320]
-MelSpectrogramLoss.window_lengths: [32, 64, 128, 256, 512, 1024, 2048, 4096]
+MelSpectrogramLoss.window_lengths: [32, 64, 128, 256, 512, 1024, 2048, 4096, 8192]
 MelSpectrogramLoss.mel_fmin: [0, 0, 0, 0, 0, 0, 0, 0]
 MelSpectrogramLoss.mel_fmax: [null, null, null, null, null, null, null, null]
 MelSpectrogramLoss.pow: 1.0
