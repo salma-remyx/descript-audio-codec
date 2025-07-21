@@ -35,6 +35,7 @@ setup(
         "torch",
         "torchaudio",
         "tqdm",
+        "silero-vad",
     ],
     extras_require={
         "dev": [

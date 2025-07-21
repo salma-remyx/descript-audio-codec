@@ -1,5 +1,7 @@
 import typing
 from typing import List
+import signal
+from contextlib import contextmanager
 
 import torch
 import torch.nn.functional as F
@@ -8,6 +10,7 @@ from audiotools import AudioSignal
 from audiotools import STFTParams
 from torch import nn
 from transformers import WavLMModel, AutoFeatureExtractor
+from silero_vad import load_silero_vad, get_speech_timestamps
 
 
 class L1Loss(nn.L1Loss):
@@ -396,7 +399,25 @@ class L2LatentsLoss(nn.Module):
 
 
 class WavLMLoss(nn.Module):
-    """WavLM loss that returns both cosine and MSE losses between embeddings."""
+    """WavLM loss that returns both cosine and MSE losses between embeddings.
+    
+    This loss computes the similarity between predicted WavLM embeddings and
+    embeddings extracted from the target audio using a pre-trained WavLM model.
+    
+    Features:
+    - Uses Voice Activity Detection (VAD) to mask non-speech regions,
+      computing the loss only on detected speech segments.
+    - This is particularly useful for noisy audio where WavLM embeddings on 
+      non-speech regions (silence, noise) are not meaningful.
+    - The loss is computed on the embeddings of the target audio, not the predicted audio.
+    
+    Parameters
+    ----------
+    device : torch.device
+        Device to run the model on
+    sample_rate : int, optional
+        Input audio sample rate, by default 44100
+    """
     def __init__(self, device, sample_rate: int = 44100):
         super().__init__()
         self.sample_rate = 16000
@@ -408,8 +429,19 @@ class WavLMLoss(nn.Module):
         self.wavlm_model = WavLMModel.from_pretrained("microsoft/wavlm-large").to(device)
         self.wavlm_model.eval()  # Freeze the model
         
+        # Load Silero VAD
+        self.vad_model = load_silero_vad(onnx=False).to(device)
+        self.vad_model.eval()
+        
     def forward(self, pred_embeddings: torch.Tensor, target_signal: AudioSignal) -> tuple[torch.Tensor, torch.Tensor]:
         """Compute WavLM losses between predicted and target audio.
+        
+        The loss is weighted by the proportion of speech in each embedding frame.
+        VAD is used to detect speech regions at the audio sample level, then
+        area-interpolated to create frame weights (0-1) representing how much of
+        each embedding frame contains speech. This provides smooth transitions and
+        accurate weighting for frames that are partially speech/silence.
+        The loss is computed on the embeddings of the target audio, not the predicted audio.
         
         Args:
             pred_embeddings: Predicted WavLM embeddings from the model [B x 1024 x T]
@@ -417,13 +449,75 @@ class WavLMLoss(nn.Module):
             
         Returns:
             Tuple of (cosine_loss, mse_loss)
-        """
+        """print(f"  Input shapes: pred_embeddings={pred_embeddings.shape}, audio={target_signal.audio_data.shape}")
+        
         # First get target embeddings with no_grad and autocast
         with torch.no_grad(), torch.cuda.amp.autocast():
             # Resample audio and move to CPU immediately
             resampled_audio = self.resampler(target_signal.audio_data.squeeze(1))
             resampled_audio_np = resampled_audio.cpu().numpy()
+
+            # Create VAD mask for each batch item
+            vad_masks = []
+            for i in range(resampled_audio.shape[0]):
+                # Get speech timestamps for this audio
+                audio_16k = resampled_audio[i].squeeze()
+                
+                try:
+                    # Add timeout protection
+                    import threading
+                    import queue
+                    
+                    result_queue = queue.Queue()
+                    exception_queue = queue.Queue()
+                    
+                    def vad_worker():
+                        try:
+                            timestamps = get_speech_timestamps(
+                                audio_16k,
+                                self.vad_model,
+                                sampling_rate=self.sample_rate,
+                                return_seconds=False  # Return sample indices
+                            )
+                            result_queue.put(timestamps)
+                        except Exception as e:
+                            exception_queue.put(e)
+                    
+                    thread = threading.Thread(target=vad_worker)
+                    thread.daemon = True
+                    thread.start()
+                    thread.join(timeout=5.0)  # 5 second timeout
+                    
+                    if thread.is_alive():
+                        speech_timestamps = []
+                    elif not exception_queue.empty():
+                        e = exception_queue.get()
+                        speech_timestamps = []
+                    else:
+                        speech_timestamps = result_queue.get()
+                        print(f"      Found {len(speech_timestamps)} speech segments")
+                except Exception as e:
+                    speech_timestamps = []  # Fallback to empty
+                
+                # Create binary mask: 1 for speech, 0 for non-speech
+                mask = torch.zeros(audio_16k.shape[0], device=resampled_audio.device)
+                for timestamp in speech_timestamps:
+                    mask[timestamp['start']:timestamp['end']] = 1.0
+                
+                vad_masks.append(mask)
+
             del resampled_audio  # Clean up GPU memory
+
+            # WavLM has ~20ms frame shift at 16kHz (320 samples)
+            # Need to downsample mask from audio samples to embedding frames
+            # Use 'area' mode to get the average speech proportion in each frame
+            # This creates a weighted mask (0-1) representing how much of each
+            # embedding frame contains speech vs non-speech
+            vad_mask = F.interpolate(
+                torch.stack(vad_masks).unsqueeze(1).float(),
+                size=pred_embeddings.shape[-1],
+                mode="area"  # Average pooling - gives proportion of speech per frame
+            )
             
             # Process target audio through WavLM
             inputs = self.feature_extractor(
@@ -445,11 +539,24 @@ class WavLMLoss(nn.Module):
                     align_corners=False
                 )
 
-        cosine_loss = 1 - F.cosine_similarity(pred_embeddings, target_embeddings, dim=1).mean()
-        mse_loss = F.mse_loss(pred_embeddings, target_embeddings)
+        # Compute weighted mean over frames
+        # speech_weight is the total weight (sum of speech proportions)
+        speech_weight = vad_mask.sum()
+        
+        if speech_weight > 0:
+            cosine_loss = 1 - (vad_mask.squeeze(1) * F.cosine_similarity(pred_embeddings, target_embeddings, dim=1)).sum() / speech_weight
+        else:
+            # No speech detected, return zero loss
+            cosine_loss = torch.tensor(0.0, device=pred_embeddings.device)
+
+        if speech_weight > 0:
+            mse_loss = (vad_mask * (pred_embeddings - target_embeddings) ** 2).sum() / (speech_weight * pred_embeddings.shape[1])
+        else:
+            mse_loss = torch.tensor(0.0, device=pred_embeddings.device)
         
         # Clean up
         del target_embeddings
+        del vad_mask
         torch.cuda.empty_cache()
         
         return cosine_loss, mse_loss
