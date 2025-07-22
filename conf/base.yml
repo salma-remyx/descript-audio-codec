@@ -78,7 +78,7 @@ MelSpectrogramLoss.mag_weight: 0.0
 WavLMLoss.vad_frame_samples: 2048
 
 # Data
-batch_size: 72
+batch_size: 288
 train/AudioDataset.duration: 0.38
 train/AudioDataset.n_examples: 10000000
 

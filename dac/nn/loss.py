@@ -514,15 +514,19 @@ class WavLMLoss(nn.Module):
             # First compute VAD on original audio
             original_audio = target_signal.audio_data.squeeze(1)  # [B x T]
             
-            vad_mask = self._compute_voice_activity_mask(original_audio).unsqueeze(1)
-            # Resample VAD mask directly to WavLM embedding frames
-            if vad_mask.shape[-1] != pred_embeddings.shape[-1]:
-                vad_mask = F.interpolate(
-                    vad_mask,
-                    size=pred_embeddings.shape[-1],
-                    mode="linear",  # Linear interpolation for smooth transitions
-                    align_corners=False
-                )
+            # Skip VAD if vad_frame_samples is 0
+            if self.vad_frame_samples > 0:
+                vad_mask = self._compute_voice_activity_mask(original_audio).unsqueeze(1)
+                # Resample VAD mask directly to WavLM embedding frames
+                if vad_mask.shape[-1] != pred_embeddings.shape[-1]:
+                    vad_mask = F.interpolate(
+                        vad_mask,
+                        size=pred_embeddings.shape[-1],
+                        mode="linear",  # Linear interpolation for smooth transitions
+                        align_corners=False
+                    )
+            else:
+                vad_mask = None
             
             # Get target embeddings
             target_embeddings = self.wavlm_model(**(self.feature_extractor(
@@ -543,25 +547,32 @@ class WavLMLoss(nn.Module):
                     align_corners=False
                 )
 
-        # Compute weighted losses
-        speech_weight = vad_mask.sum()
-        
-        if speech_weight > 0:
-            # Weighted cosine similarity loss
-            cosine_sim = F.cosine_similarity(pred_embeddings, target_embeddings, dim=1)
-            cosine_loss = 1 - (vad_mask.squeeze(1) * cosine_sim).sum() / speech_weight
+        # Compute losses with or without VAD weighting
+        if self.vad_frame_samples > 0 and vad_mask is not None:
+            # Compute weighted losses
+            speech_weight = vad_mask.sum()
             
-            # Weighted MSE loss
-            mse = (pred_embeddings - target_embeddings) ** 2
-            mse_loss = (vad_mask * mse).sum() / (speech_weight * pred_embeddings.shape[1])
+            if speech_weight > 0:
+                # Weighted cosine similarity loss
+                cosine_sim = F.cosine_similarity(pred_embeddings, target_embeddings, dim=1)
+                cosine_loss = 1 - (vad_mask.squeeze(1) * cosine_sim).sum() / speech_weight
+                
+                # Weighted MSE loss
+                mse = (pred_embeddings - target_embeddings) ** 2
+                mse_loss = (vad_mask * mse).sum() / (speech_weight * pred_embeddings.shape[1])
+            else:
+                # No speech detected, return zero loss
+                cosine_loss = torch.tensor(0.0, device=pred_embeddings.device)
+                mse_loss = torch.tensor(0.0, device=pred_embeddings.device)
         else:
-            # No speech detected, return zero loss
-            cosine_loss = torch.tensor(0.0, device=pred_embeddings.device)
-            mse_loss = torch.tensor(0.0, device=pred_embeddings.device)
+            # No VAD weighting - compute standard losses
+            cosine_loss = 1 - F.cosine_similarity(pred_embeddings, target_embeddings, dim=1).mean()
+            mse_loss = F.mse_loss(pred_embeddings, target_embeddings)
         
         # Clean up
         del target_embeddings
-        del vad_mask
+        if vad_mask is not None:
+            del vad_mask
         torch.cuda.empty_cache()
         
         return cosine_loss, mse_loss
