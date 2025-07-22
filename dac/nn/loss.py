@@ -1,7 +1,6 @@
 import typing
 from typing import List
-import signal
-from contextlib import contextmanager
+import math
 
 import torch
 import torch.nn.functional as F
@@ -10,7 +9,6 @@ from audiotools import AudioSignal
 from audiotools import STFTParams
 from torch import nn
 from transformers import WavLMModel, AutoFeatureExtractor
-from silero_vad import load_silero_vad, get_speech_timestamps
 
 
 class L1Loss(nn.L1Loss):
@@ -405,11 +403,9 @@ class WavLMLoss(nn.Module):
     embeddings extracted from the target audio using a pre-trained WavLM model.
     
     Features:
-    - Uses Voice Activity Detection (VAD) to mask non-speech regions,
-      computing the loss only on detected speech segments.
-    - This is particularly useful for noisy audio where WavLM embeddings on 
-      non-speech regions (silence, noise) are not meaningful.
-    - The loss is computed on the embeddings of the target audio, not the predicted audio.
+    - Uses lightweight Voice Activity Detection (VAD) to weight loss by speech probability
+    - Computes loss only on regions likely to contain speech
+    - Efficient parallel processing suitable for distributed training
     
     Parameters
     ----------
@@ -417,8 +413,10 @@ class WavLMLoss(nn.Module):
         Device to run the model on
     sample_rate : int, optional
         Input audio sample rate, by default 44100
+    vad_frame_samples : int, optional
+        Frame size in samples for VAD at the original sample rate, by default 2048
     """
-    def __init__(self, device, sample_rate: int = 44100):
+    def __init__(self, device, sample_rate: int = 44100, vad_frame_samples: int = 2048):
         super().__init__()
         self.sample_rate = 16000
         self.resampler = torchaudio.transforms.Resample(
@@ -429,19 +427,79 @@ class WavLMLoss(nn.Module):
         self.wavlm_model = WavLMModel.from_pretrained("microsoft/wavlm-large").to(device)
         self.wavlm_model.eval()  # Freeze the model
         
-        # Load Silero VAD
-        self.vad_model = load_silero_vad(onnx=False).to(device)
-        self.vad_model.eval()
+        # VAD parameters
+        self.vad_frame_samples = vad_frame_samples
+        
+        # Speech-based ZCR threshold
+        # Highest pitch in human speech is around 500 Hz
+        # ZCR ≈ 2 * frequency for periodic signals
+        # So max speech ZCR ≈ 2 * 500 = 1000 crossings/second
+        # Convert to crossings per sample
+        self.log_max_speech_zcr = math.log(1000.0 / sample_rate + 1e-10)
+
+    def _compute_voice_activity_mask(self, audio: torch.Tensor) -> torch.Tensor:
+        """Compute voice activity mask using energy-based detection.
+        
+        This is a lightweight, threshold-agnostic VAD that uses:
+        1. Normalized energy as base probability
+        2. Zero-crossing rate to distinguish speech from noise
+        3. Adaptive smoothing
+        
+        Args:
+            audio: Input audio tensor [B x T]
+            
+        Returns:
+            Voice probability mask [B x n_frames] with values in [0, 1]
+        """
+        B, T = audio.shape
+        
+        # Ensure we have enough samples for at least one frame
+        if T < self.vad_frame_samples:
+            return torch.ones(B, 1, device=audio.device)
+        
+        # Compute frame energy
+        # Use ceiling division to include all samples
+        n_frames = (T + self.vad_frame_samples - 1) // self.vad_frame_samples
+        
+        # Pad audio if necessary to fill the last frame
+        pad_size = n_frames * self.vad_frame_samples - T
+        if pad_size > 0:
+            audio_padded = F.pad(audio, (0, pad_size), mode='constant', value=0)
+        else:
+            audio_padded = audio
+            
+        # Reshape audio into frames
+        audio_padded = audio_padded.reshape(B, n_frames, self.vad_frame_samples)
+        
+        # Use sigmoid for energy scaling in log domain
+        # This handles the wide dynamic range better
+        log_energy = torch.log((audio_padded ** 2).mean(dim=-1) + 1e-10)
+        log_energy_min = log_energy.min(dim=1, keepdim=True)[0]
+        log_energy_max = log_energy.max(dim=1, keepdim=True)[0]
+        energy_weight = torch.sigmoid(8 * (2 * log_energy - log_energy_min - log_energy_max) / (log_energy_max - log_energy_min + 1e-8))
+        
+        # Use speech-based ZCR weighting in log domain
+        # Speech has ZCR below max_speech_zcr, noise typically has higher ZCR
+        log_zcr = torch.log(((audio_padded[:, :, 1:] * audio_padded[:, :, :-1]) < 0).float().mean(dim=-1) + 1e-10)
+        zcr_weight = torch.sigmoid(-32 * (log_zcr - self.log_max_speech_zcr) / (self.log_max_speech_zcr + 1e-8))
+        
+        vad_prob = energy_weight * zcr_weight
+        
+        # Apply median filter of 3 frames to smooth transitions
+        if n_frames >= 3:
+            # Pad for median filtering
+            vad_prob_padded = F.pad(vad_prob, (1, 1), mode='replicate')
+            # Unfold to get sliding windows of size 3
+            vad_prob_unfold = vad_prob_padded.unfold(1, 3, 1)
+            # Take median of each window
+            vad_prob = vad_prob_unfold.median(dim=-1)[0]
+        
+        return vad_prob
         
     def forward(self, pred_embeddings: torch.Tensor, target_signal: AudioSignal) -> tuple[torch.Tensor, torch.Tensor]:
         """Compute WavLM losses between predicted and target audio.
         
-        The loss is weighted by the proportion of speech in each embedding frame.
-        VAD is used to detect speech regions at the audio sample level, then
-        area-interpolated to create frame weights (0-1) representing how much of
-        each embedding frame contains speech. This provides smooth transitions and
-        accurate weighting for frames that are partially speech/silence.
-        The loss is computed on the embeddings of the target audio, not the predicted audio.
+        The loss is weighted by voice activity probability to focus on speech regions.
         
         Args:
             pred_embeddings: Predicted WavLM embeddings from the model [B x 1024 x T]
@@ -449,86 +507,32 @@ class WavLMLoss(nn.Module):
             
         Returns:
             Tuple of (cosine_loss, mse_loss)
-        """print(f"  Input shapes: pred_embeddings={pred_embeddings.shape}, audio={target_signal.audio_data.shape}")
+        """
         
-        # First get target embeddings with no_grad and autocast
-        with torch.no_grad(), torch.cuda.amp.autocast():
-            # Resample audio and move to CPU immediately
-            resampled_audio = self.resampler(target_signal.audio_data.squeeze(1))
-            resampled_audio_np = resampled_audio.cpu().numpy()
-
-            # Create VAD mask for each batch item
-            vad_masks = []
-            for i in range(resampled_audio.shape[0]):
-                # Get speech timestamps for this audio
-                audio_16k = resampled_audio[i].squeeze()
-                
-                try:
-                    # Add timeout protection
-                    import threading
-                    import queue
-                    
-                    result_queue = queue.Queue()
-                    exception_queue = queue.Queue()
-                    
-                    def vad_worker():
-                        try:
-                            timestamps = get_speech_timestamps(
-                                audio_16k,
-                                self.vad_model,
-                                sampling_rate=self.sample_rate,
-                                return_seconds=False  # Return sample indices
-                            )
-                            result_queue.put(timestamps)
-                        except Exception as e:
-                            exception_queue.put(e)
-                    
-                    thread = threading.Thread(target=vad_worker)
-                    thread.daemon = True
-                    thread.start()
-                    thread.join(timeout=5.0)  # 5 second timeout
-                    
-                    if thread.is_alive():
-                        speech_timestamps = []
-                    elif not exception_queue.empty():
-                        e = exception_queue.get()
-                        speech_timestamps = []
-                    else:
-                        speech_timestamps = result_queue.get()
-                        print(f"      Found {len(speech_timestamps)} speech segments")
-                except Exception as e:
-                    speech_timestamps = []  # Fallback to empty
-                
-                # Create binary mask: 1 for speech, 0 for non-speech
-                mask = torch.zeros(audio_16k.shape[0], device=resampled_audio.device)
-                for timestamp in speech_timestamps:
-                    mask[timestamp['start']:timestamp['end']] = 1.0
-                
-                vad_masks.append(mask)
-
-            del resampled_audio  # Clean up GPU memory
-
-            # WavLM has ~20ms frame shift at 16kHz (320 samples)
-            # Need to downsample mask from audio samples to embedding frames
-            # Use 'area' mode to get the average speech proportion in each frame
-            # This creates a weighted mask (0-1) representing how much of each
-            # embedding frame contains speech vs non-speech
-            vad_mask = F.interpolate(
-                torch.stack(vad_masks).unsqueeze(1).float(),
-                size=pred_embeddings.shape[-1],
-                mode="area"  # Average pooling - gives proportion of speech per frame
-            )
+        # Get target embeddings
+        with torch.no_grad(), torch.amp.autocast(device_type='cuda', enabled=torch.cuda.is_available()):
+            # First compute VAD on original audio
+            original_audio = target_signal.audio_data.squeeze(1)  # [B x T]
             
-            # Process target audio through WavLM
-            inputs = self.feature_extractor(
-                resampled_audio_np,
+            vad_mask = self._compute_voice_activity_mask(original_audio).unsqueeze(1)
+            # Resample VAD mask directly to WavLM embedding frames
+            if vad_mask.shape[-1] != pred_embeddings.shape[-1]:
+                vad_mask = F.interpolate(
+                    vad_mask,
+                    size=pred_embeddings.shape[-1],
+                    mode="linear",  # Linear interpolation for smooth transitions
+                    align_corners=False
+                )
+            
+            # Get target embeddings
+            target_embeddings = self.wavlm_model(**(self.feature_extractor(
+                self.resampler(original_audio).cpu().numpy(),
                 sampling_rate=self.sample_rate,
                 return_tensors="pt"
-            ).to(pred_embeddings.device)
+            ).to(pred_embeddings.device))).last_hidden_state.transpose(1, 2)
             
-            # Get target embeddings using mixed precision
-            target_embeddings = self.wavlm_model(**inputs).last_hidden_state.transpose(1, 2)
-            del inputs  # Clean up GPU memory
+            # Clean up
+            del original_audio
             
             # Resample target embeddings if lengths don't match
             if target_embeddings.shape[-1] != pred_embeddings.shape[-1]:
@@ -539,19 +543,20 @@ class WavLMLoss(nn.Module):
                     align_corners=False
                 )
 
-        # Compute weighted mean over frames
-        # speech_weight is the total weight (sum of speech proportions)
+        # Compute weighted losses
         speech_weight = vad_mask.sum()
         
         if speech_weight > 0:
-            cosine_loss = 1 - (vad_mask.squeeze(1) * F.cosine_similarity(pred_embeddings, target_embeddings, dim=1)).sum() / speech_weight
+            # Weighted cosine similarity loss
+            cosine_sim = F.cosine_similarity(pred_embeddings, target_embeddings, dim=1)
+            cosine_loss = 1 - (vad_mask.squeeze(1) * cosine_sim).sum() / speech_weight
+            
+            # Weighted MSE loss
+            mse = (pred_embeddings - target_embeddings) ** 2
+            mse_loss = (vad_mask * mse).sum() / (speech_weight * pred_embeddings.shape[1])
         else:
             # No speech detected, return zero loss
             cosine_loss = torch.tensor(0.0, device=pred_embeddings.device)
-
-        if speech_weight > 0:
-            mse_loss = (vad_mask * (pred_embeddings - target_embeddings) ** 2).sum() / (speech_weight * pred_embeddings.shape[1])
-        else:
             mse_loss = torch.tensor(0.0, device=pred_embeddings.device)
         
         # Clean up

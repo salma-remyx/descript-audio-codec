@@ -75,6 +75,7 @@ MelSpectrogramLoss.mel_fmax: [null, null, null, null, null, null, null, null]
 MelSpectrogramLoss.pow: 1.0
 MelSpectrogramLoss.clamp_eps: 1.0e-5
 MelSpectrogramLoss.mag_weight: 0.0
+WavLMLoss.vad_frame_samples: 2048
 
 # Data
 batch_size: 72
@@ -94,39 +95,39 @@ AudioDataset.without_replacement: true
 
 train/build_dataset.folders:
   speech_fb:
-    - /data/shared_data/raw/daps/train
+    - /data/dac/daps/train
   speech_hq:
-    - /data/shared_data/raw/vctk
-    - /data/shared_data/raw/vocalset
-    - /data/shared_data/raw/read_speech
-    - /data/shared_data/raw/french_speech
+    - /data/dac/vctk
+    - /data/dac/vocalset
+    - /data/dac/read_speech
+    - /data/dac/french_speech
   speech_uq:
-    - /data/shared_data/raw/emotional_speech/
-    - /data/shared_data/raw/common_voice/
-    - /data/shared_data/raw/german_speech/
-    - /data/shared_data/raw/russian_speech/
-    - /data/shared_data/raw/spanish_speech/
+    - /data/dac/emotional_speech/
+    - /data/dac/common_voice/
+    - /data/dac/german_speech/
+    - /data/dac/russian_speech/
+    - /data/dac/spanish_speech/
   music_hq:
-    - /data/musdb18hq/train
+    - /data/dac/musdb18hq/train
   music_uq:
-    - /data/shared_data/raw/mtg-jamendo
+    - /data/dac/mtg-jamendo
   general:
-    - /data/audioset/audios/unbalanced_train_segments/
-    - /data/audioset/audios/balanced_train_segments/
+    - /data/dac/audioset/audios/unbalanced_train_segments/
+    - /data/dac/audioset/audios/balanced_train_segments/
 
 val/build_dataset.folders:
   speech_hq:
-    - /data/shared_data/raw/daps/val
+    - /data/dac/daps/val
   music_hq:
-    - /data/musdb18hq/test
+    - /data/dac/musdb18hq/test
   general:
-    - /data/audioset/audios/eval_segments/
+    - /data/dac/audioset/audios/eval_segments/
 
 test/build_dataset.folders:
   speech_hq:
-    - /data/shared_data/raw/daps/test
+    - /data/dac/daps/test
   music_hq:
-    - /data/musdb18hq/test
+    - /data/dac/musdb18hq/test
   general:
-    - /data/audioset/audios/eval_segments/
+    - /data/dac/audioset/audios/eval_segments/
 
