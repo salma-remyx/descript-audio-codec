@@ -154,6 +154,7 @@ class WavLMDecoder(nn.Module):
         self,
         input_channel,
         channels,
+        rates: List[int] = [],
         d_out: int = 1024,
         causal: bool = False,
         use_rmsnorm: bool = True,
@@ -161,12 +162,21 @@ class WavLMDecoder(nn.Module):
         super().__init__()
         kernel_size = 2 if causal else 3
 
-        # Add final conv layer
-        layers = [
-            WNConv1d(input_channel, channels, kernel_size=kernel_size, causal=causal),
-            RMSNorm(channels) if use_rmsnorm else nn.Identity(),
-            Snake1d(channels),
-            WNConv1d(channels, d_out, kernel_size=kernel_size, causal=causal),
+        # Add first conv layer
+        layers = [WNConv1d(input_channel, channels, kernel_size=kernel_size, causal=causal)]
+
+        # Add upsampling + decoder blocks
+        input_dim = channels
+        for stride in rates:
+            output_dim = input_dim // stride
+            layers += [DecoderBlock(input_dim, output_dim, stride, causal=causal, use_rmsnorm=use_rmsnorm)]
+            input_dim = output_dim
+
+        # Add final conv layers
+        layers += [
+            RMSNorm(input_dim) if use_rmsnorm else nn.Identity(),
+            Snake1d(input_dim),
+            WNConv1d(input_dim, d_out, kernel_size=kernel_size, causal=causal),
         ]
 
         self.model = nn.Sequential(*layers)
@@ -183,6 +193,7 @@ class DAC(BaseModel, CodecMixin):
         latent_dim: int = None,
         decoder_dim: int = 1536,
         decoder_rates: List[int] = [8, 8, 4, 2],
+        wavlm_decoder_rates: List[int] = [],
         latent_noise_max: float = 0.05,  # Maximum standard deviation for noise injection
         sample_rate: int = 44100,
         causal: bool = False,
@@ -215,6 +226,7 @@ class DAC(BaseModel, CodecMixin):
         self.wavlm_decoder = WavLMDecoder(
             latent_dim,
             decoder_dim,
+            wavlm_decoder_rates,
             causal=causal,
             use_rmsnorm=use_rmsnorm,
         )

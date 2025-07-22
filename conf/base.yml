@@ -5,6 +5,7 @@ DAC.encoder_rates: [2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2]
 DAC.latent_dim: 64
 DAC.decoder_dim: 8192
 DAC.decoder_rates: [2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2]
+DAC.wavlm_decoder_rates: [2]
 DAC.latent_noise_max: 0.1  # Maximum standard deviation for noise injection during training
 DAC.causal: true
 DAC.use_rmsnorm: true
@@ -78,7 +79,7 @@ MelSpectrogramLoss.mag_weight: 0.0
 WavLMLoss.vad_frame_samples: 2048
 
 # Data
-batch_size: 512
+batch_size: 256
 train/AudioDataset.duration: 0.38
 train/AudioDataset.n_examples: 10000000
 
