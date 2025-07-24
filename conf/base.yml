@@ -51,8 +51,8 @@ lambdas:
   adv/feat_loss: 0.1
   adv/gen_loss: 0.1
   latents/loss: 0.1
-  wavlm/cosine_loss: 10.0
-  wavlm/mse_loss: 100.0
+  wavlm/cosine_loss: 1.0
+  wavlm/mse_loss: 10.0
 
 VolumeNorm.db: [const, -16]
 
