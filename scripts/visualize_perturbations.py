@@ -30,8 +30,8 @@ def analyze_latent_perturbations(
     model_path: Path = Path(""),
     hop_length: int = 2048,
     n_mels: int = 64,
-    window_before: int = 5,
-    window_after: int = 21,
+    window_before: int = 10,
+    window_after: int = 10,
     max_batch_size: int = 16,
     sample_perturbations: str = "",
 ):
@@ -66,12 +66,19 @@ def analyze_latent_perturbations(
     signal.to(device)  # This uses the model's device
     signal.audio_data = model.preprocess(signal.audio_data, signal.sample_rate)
     
+    # Compute original mel spectrogram
+    mel_orig = signal.mel_spectrogram(
+        n_mels=n_mels, window_length=hop_length, hop_length=hop_length).squeeze().cpu().numpy()
+
     # Get original latents and reconstruction
     with torch.no_grad():
         latents_orig = model.encode(signal.audio_data)
         mel_recons = AudioSignal(model.decode(latents_orig), sample_rate=signal.sample_rate).mel_spectrogram(
             n_mels=n_mels, window_length=hop_length, hop_length=hop_length).squeeze().cpu().numpy()
-
+    
+    # Compute baseline MCD
+    baseline_mcd = compute_mcd(mel_orig, mel_recons)
+    
     # Compute covariance matrix
     cov_matrix = np.cov(latents_orig.squeeze(0).cpu().numpy())
 
@@ -125,6 +132,7 @@ def analyze_latent_perturbations(
     plt.ylabel('MCD [dB]')
     plt.xlim(min(perturbation_magnitudes), max(perturbation_magnitudes))
     plt.grid(True, alpha=0.3)
+    plt.title(f'Robustness\nBaseline MCD: {baseline_mcd:.0f}dB')
     plt.tight_layout()
     plt.savefig(output_dir / f"smoothness_{model_path.name}.svg")
     plt.close()
@@ -182,7 +190,7 @@ def analyze_latent_perturbations(
             
             # Extract MCD for frames around the perturbation
             for j, rel_dist in enumerate(relative_distances):
-                mel_frame_idx = pos + rel_dist
+                mel_frame_idx = np.round((pos + rel_dist) * np.prod(model.encoder_rates) / hop_length).astype(int)
                 
                 mcds[j] += compute_mcd(mel_recons[:, mel_frame_idx:mel_frame_idx+1],
                                        mel_pert[:, mel_frame_idx:mel_frame_idx+1])
