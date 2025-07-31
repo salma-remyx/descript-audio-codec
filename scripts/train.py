@@ -1,6 +1,17 @@
 import os
 import sys
 import warnings
+
+# Monkey patch torch.load to handle PyTorch 2.6's weights_only default
+import torch
+_original_torch_load = torch.load
+def _patched_torch_load(*args, **kwargs):
+    # If weights_only is not explicitly set, set it to False for compatibility
+    if 'weights_only' not in kwargs:
+        kwargs['weights_only'] = False
+    return _original_torch_load(*args, **kwargs)
+torch.load = _patched_torch_load
+
 from dataclasses import dataclass
 from pathlib import Path
 

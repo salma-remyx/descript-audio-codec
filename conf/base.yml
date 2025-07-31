@@ -10,12 +10,6 @@ DAC.latent_noise_max: 0.1  # Maximum standard deviation for noise injection duri
 DAC.causal: true
 DAC.use_rmsnorm: true
 
-# Quantization
-DAC.n_codebooks: 9
-DAC.codebook_size: 1024
-DAC.codebook_dim: 8
-DAC.quantizer_dropout: 1.0
-
 # Discriminator
 Discriminator.sample_rate: 44100
 Discriminator.rates: []
@@ -45,16 +39,14 @@ num_workers: 32
 val_idx: [0, 1, 2, 3, 4, 5, 6, 7]
 seed: 0
 lambdas:
+  adv/gen_loss: 0.1
+  adv/feat_loss: 0.1
+  latents/loss: 0.05
   mel/loss: 1.0
   stft/loss: 0.1
   waveform/loss: 10.0
-  adv/feat_loss: 0.1
-  adv/gen_loss: 0.1
-  latents/loss: 0.1
+  wavlm/mse_loss: 1.0
   wavlm/cosine_loss: 1.0
-  wavlm/mse_loss: 10.0
-
-VolumeNorm.db: [const, -16]
 
 # Transforms
 build_transform.preprocess:
@@ -63,16 +55,14 @@ build_transform.augment_prob: 0.0
 build_transform.augment:
   - Identity
 build_transform.postprocess:
-  - VolumeNorm
-  - RescaleAudio
   - ShiftPhase
 
 # Loss setup
 MultiScaleSTFTLoss.window_lengths: [8192, 4096, 2048, 1024, 512]
-MelSpectrogramLoss.n_mels: [5, 10, 20, 40, 80, 160, 320]
+MelSpectrogramLoss.n_mels: [5, 10, 20, 40, 80, 160, 320, 640, 1280]
 MelSpectrogramLoss.window_lengths: [32, 64, 128, 256, 512, 1024, 2048, 4096, 8192]
-MelSpectrogramLoss.mel_fmin: [0, 0, 0, 0, 0, 0, 0, 0]
-MelSpectrogramLoss.mel_fmax: [null, null, null, null, null, null, null, null]
+MelSpectrogramLoss.mel_fmin: [0, 0, 0, 0, 0, 0, 0, 0, 0]
+MelSpectrogramLoss.mel_fmax: [null, null, null, null, null, null, null, null, null]
 MelSpectrogramLoss.pow: 1.0
 MelSpectrogramLoss.clamp_eps: 1.0e-5
 MelSpectrogramLoss.mag_weight: 0.0
