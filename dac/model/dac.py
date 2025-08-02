@@ -41,14 +41,14 @@ class ResidualUnit(nn.Module):
 
 
 class EncoderBlock(nn.Module):
-    def __init__(self, dim: int = 16, stride: int = 1, causal: bool = False, use_rmsnorm: bool = True):
+    def __init__(self, input_dim: int = 16, output_dim: int = 16, stride: int = 1, causal: bool = False, use_rmsnorm: bool = True):
         super().__init__()
         self.block = nn.Sequential(
-            ResidualUnit(dim // stride, dilation=1, causal=causal, use_rmsnorm=use_rmsnorm),
-            Snake1d(dim // stride),
+            ResidualUnit(input_dim, dilation=1, causal=causal, use_rmsnorm=use_rmsnorm),
+            Snake1d(input_dim),
             WNConv1d(
-                dim // stride,
-                dim,
+                input_dim,
+                output_dim,
                 kernel_size=2 * stride,
                 stride=stride,
                 causal=causal,
@@ -75,20 +75,22 @@ class Encoder(nn.Module):
         self.block = [WNConv1d(1, d_model, kernel_size=kernel_size, causal=causal)]
 
         # Create EncoderBlocks that increase channels by multipliers as they downsample by strides
+        current_dim = d_model
         for stride, multiplier in zip(strides, multipliers):
-            d_model *= multiplier
-            self.block += [EncoderBlock(d_model, stride=stride, causal=causal, use_rmsnorm=use_rmsnorm)]
+            output_dim = current_dim * multiplier
+            self.block += [EncoderBlock(current_dim, output_dim, stride=stride, causal=causal, use_rmsnorm=use_rmsnorm)]
+            current_dim = output_dim
 
         # Create last convolution
         self.block += [
-            RMSNorm(d_model) if use_rmsnorm else nn.Identity(),
-            Snake1d(d_model),
-            WNConv1d(d_model, d_latent, kernel_size=kernel_size, causal=causal),
+            RMSNorm(current_dim) if use_rmsnorm else nn.Identity(),
+            Snake1d(current_dim),
+            WNConv1d(current_dim, d_latent, kernel_size=kernel_size, causal=causal),
         ]
 
         # Wrap black into nn.Sequential
         self.block = nn.Sequential(*self.block)
-        self.enc_dim = d_model
+        self.enc_dim = current_dim
 
     def forward(self, x):
         return self.block(x)
