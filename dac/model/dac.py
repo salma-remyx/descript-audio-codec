@@ -64,6 +64,7 @@ class Encoder(nn.Module):
         self,
         d_model: int = 64,
         strides: list = [2, 4, 8, 8],
+        multipliers: list = [2, 4, 8, 8],
         d_latent: int = 64,
         causal: bool = False,
         use_rmsnorm: bool = True,
@@ -73,9 +74,9 @@ class Encoder(nn.Module):
         # Create first convolution
         self.block = [WNConv1d(1, d_model, kernel_size=kernel_size, causal=causal)]
 
-        # Create EncoderBlocks that double channels as they downsample by `stride`
-        for stride in strides:
-            d_model *= stride
+        # Create EncoderBlocks that increase channels by multipliers as they downsample by strides
+        for stride, multiplier in zip(strides, multipliers):
+            d_model *= multiplier
             self.block += [EncoderBlock(d_model, stride=stride, causal=causal, use_rmsnorm=use_rmsnorm)]
 
         # Create last convolution
@@ -117,7 +118,8 @@ class Decoder(nn.Module):
         self,
         input_channel,
         channels,
-        rates,
+        strides,
+        multipliers,
         d_out: int = 1,
         causal: bool = False,
         use_rmsnorm: bool = True,
@@ -130,8 +132,8 @@ class Decoder(nn.Module):
 
         # Add upsampling + MRF blocks
         input_dim = channels
-        for stride in rates:
-            output_dim = input_dim // stride
+        for stride, multiplier in zip(strides, multipliers):
+            output_dim = input_dim // multiplier
             layers += [DecoderBlock(input_dim, output_dim, stride, causal=causal, use_rmsnorm=use_rmsnorm)]
             input_dim = output_dim
 
@@ -154,7 +156,8 @@ class WavLMDecoder(nn.Module):
         self,
         input_channel,
         channels,
-        rates: List[int] = [],
+        strides: List[int] = [],
+        multipliers: List[int] = [],
         d_out: int = 1024,
         causal: bool = False,
         use_rmsnorm: bool = True,
@@ -167,8 +170,8 @@ class WavLMDecoder(nn.Module):
 
         # Add upsampling + decoder blocks
         input_dim = channels
-        for stride in rates:
-            output_dim = input_dim // stride
+        for stride, multiplier in zip(strides, multipliers):
+            output_dim = input_dim // multiplier
             layers += [DecoderBlock(input_dim, output_dim, stride, causal=causal, use_rmsnorm=use_rmsnorm)]
             input_dim = output_dim
 
@@ -189,11 +192,14 @@ class DAC(BaseModel, CodecMixin):
     def __init__(
         self,
         encoder_dim: int = 64,
-        encoder_rates: List[int] = [2, 4, 8, 8],
+        encoder_strides: List[int] = [2, 4, 8, 8],
+        encoder_multipliers: List[int] = [2, 4, 8, 8],
         latent_dim: int = None,
         decoder_dim: int = 1536,
-        decoder_rates: List[int] = [8, 8, 4, 2],
-        wavlm_decoder_rates: List[int] = [],
+        decoder_strides: List[int] = [8, 8, 4, 2],
+        decoder_multipliers: List[int] = [8, 8, 4, 2],
+        wavlm_decoder_strides: List[int] = [],
+        wavlm_decoder_multipliers: List[int] = [],
         latent_noise_max: float = 0.05,  # Maximum standard deviation for noise injection
         sample_rate: int = 44100,
         causal: bool = False,
@@ -202,31 +208,35 @@ class DAC(BaseModel, CodecMixin):
         super().__init__()
 
         self.encoder_dim = encoder_dim
-        self.encoder_rates = encoder_rates
+        self.encoder_strides = encoder_strides
+        self.encoder_multipliers = encoder_multipliers
         self.decoder_dim = decoder_dim
-        self.decoder_rates = decoder_rates
+        self.decoder_strides = decoder_strides
+        self.decoder_multipliers = decoder_multipliers
         self.sample_rate = sample_rate
         self.latent_noise_max = latent_noise_max
 
         if latent_dim is None:
-            latent_dim = encoder_dim * (2 ** len(encoder_rates))
+            latent_dim = encoder_dim * np.prod(encoder_multipliers)
 
         self.latent_dim = latent_dim
 
-        self.hop_length = np.prod(encoder_rates)
-        self.encoder = Encoder(encoder_dim, encoder_rates, latent_dim, causal=causal, use_rmsnorm=use_rmsnorm)
+        self.hop_length = np.prod(encoder_strides)
+        self.encoder = Encoder(encoder_dim, encoder_strides, encoder_multipliers, latent_dim, causal=causal, use_rmsnorm=use_rmsnorm)
 
         self.decoder = Decoder(
             latent_dim,
             decoder_dim,
-            decoder_rates,
+            decoder_strides,
+            decoder_multipliers,
             causal=causal,
             use_rmsnorm=use_rmsnorm,
         )
         self.wavlm_decoder = WavLMDecoder(
             latent_dim,
             decoder_dim,
-            wavlm_decoder_rates,
+            wavlm_decoder_strides,
+            wavlm_decoder_multipliers,
             causal=causal,
             use_rmsnorm=use_rmsnorm,
         )

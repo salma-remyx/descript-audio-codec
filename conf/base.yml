@@ -1,11 +1,14 @@
 # Model setup
 DAC.sample_rate: 44100
-DAC.encoder_dim: 4
-DAC.encoder_rates: [2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2]
+DAC.encoder_dim: 16
+DAC.encoder_strides: [2, 4, 4, 4, 4, 4]
+DAC.encoder_multipliers: [2, 2, 2, 2, 2, 2]
 DAC.latent_dim: 64
-DAC.decoder_dim: 8192
-DAC.decoder_rates: [2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2]
-DAC.wavlm_decoder_rates: [2]
+DAC.decoder_dim: 1024
+DAC.decoder_strides: [4, 4, 4, 4, 4, 2]
+DAC.decoder_multipliers: [2, 2, 2, 2, 2, 2]
+DAC.wavlm_decoder_strides: [2]
+DAC.wavlm_decoder_multipliers: [2]
 DAC.latent_noise_max: 0.1  # Maximum standard deviation for noise injection during training
 DAC.causal: true
 DAC.use_rmsnorm: true
@@ -66,7 +69,7 @@ MelSpectrogramLoss.mel_fmax: [null, null, null, null, null, null, null, null, nu
 MelSpectrogramLoss.pow: 1.0
 MelSpectrogramLoss.clamp_eps: 1.0e-5
 MelSpectrogramLoss.mag_weight: 0.0
-WavLMLoss.vad_frame_samples: 2048
+WavLMLoss.vad_frame_samples: 0
 
 # Data
 batch_size: 256
