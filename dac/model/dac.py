@@ -45,6 +45,8 @@ class EncoderBlock(nn.Module):
         super().__init__()
         self.block = nn.Sequential(
             ResidualUnit(input_dim, dilation=1, causal=causal, use_rmsnorm=use_rmsnorm),
+            ResidualUnit(input_dim, dilation=1, causal=causal, use_rmsnorm=use_rmsnorm),
+            ResidualUnit(input_dim, dilation=1, causal=causal, use_rmsnorm=use_rmsnorm),
             Snake1d(input_dim),
             WNConv1d(
                 input_dim,
@@ -108,6 +110,8 @@ class DecoderBlock(nn.Module):
                 stride=stride,
                 causal=causal,
             ),
+            ResidualUnit(output_dim, dilation=1, causal=causal, use_rmsnorm=use_rmsnorm),
+            ResidualUnit(output_dim, dilation=1, causal=causal, use_rmsnorm=use_rmsnorm),
             ResidualUnit(output_dim, dilation=1, causal=causal, use_rmsnorm=use_rmsnorm),
         )
 
