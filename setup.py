@@ -53,6 +53,9 @@ setup(
             "tabulate",
             "encodec",
             "wandb",
+            "speechbrain>=0.5.0",  # For SIM (Speaker Identification Metric)
+            "openai-whisper>=20231117",  # For WER (Word Error Rate)
+            "jiwer>=3.0.0",  # For WER calculation
         ],
     },
 )

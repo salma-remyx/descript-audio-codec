@@ -30,6 +30,7 @@ from audiotools.ml.decorators import when
 import wandb
 
 import dac
+from metrics import SIM, PESQ, WER
 
 warnings.filterwarnings("ignore", category=UserWarning)
 
@@ -170,6 +171,11 @@ class State:
     val_data: AudioDataset
 
     tracker: Tracker
+    
+    # Audio quality metrics
+    sim_metric: SIM = None
+    pesq_metric: PESQ = None
+    wer_metric: WER = None
 
 
 @argbind.bind(without_prefix=True)
@@ -238,6 +244,14 @@ def load(
     l2_latents = losses.L2LatentsLoss()
     wavlm_loss = losses.WavLMLoss(device=accel.device)
     
+    # Initialize metrics (only on rank 0 to save memory)
+    if accel.local_rank == 0:
+        sim_metric = None #SIM(device=accel.device)
+        pesq_metric = PESQ()
+        wer_metric = WER(device=accel.device)
+    else:
+        sim_metric = pesq_metric = wer_metric = None
+    
     return State(
         generator=generator,
         optimizer_g=optimizer_g,
@@ -254,6 +268,9 @@ def load(
         tracker=tracker,
         train_data=train_data,
         val_data=val_data,
+        sim_metric=sim_metric,
+        pesq_metric=pesq_metric,
+        wer_metric=wer_metric,
     )
 
 
@@ -383,6 +400,55 @@ def save_samples(state, val_idx):
 
     out = state.generator(signal.audio_data, signal.sample_rate)
     recons = AudioSignal(out["audio"], signal.sample_rate)
+
+    # Calculate metrics between original and reconstructed audio
+    if state.pesq_metric is not None or state.wer_metric is not None:
+        # Lists to store metrics for all samples
+        sim_scores = []
+        pesq_scores = []
+        wer_scores = []
+        
+        for i in range(signal.batch_size):
+            # Get individual signals
+            original_audio = signal[i].audio_data.squeeze().cpu().numpy()
+            encoded_audio = recons[i].audio_data.squeeze().cpu().numpy()
+            
+            # Calculate SIM
+            if state.sim_metric is not None:
+                sim_scores.append(state.sim_metric(original_audio, encoded_audio, signal.sample_rate))
+            
+            # Calculate PESQ
+            if state.pesq_metric is not None:
+                pesq_scores.append(state.pesq_metric(original_audio, encoded_audio, signal.sample_rate))
+            
+            # Calculate WER - save audio to temporary files first
+            if state.wer_metric is not None:
+                orig_path = f"temp_wer_original_{i}.wav"
+                enc_path = f"temp_wer_encoded_{i}.wav"
+                signal[i].cpu().write(orig_path)
+                AudioSignal(recons[i].audio_data, signal.sample_rate).cpu().write(enc_path)
+                
+                # Calculate WER using file paths
+                wer_scores.append(state.wer_metric(orig_path, enc_path))
+                
+                # Clean up temporary files
+                os.remove(orig_path)
+                os.remove(enc_path)
+        
+        # Log average metrics to wandb
+        metrics_to_log = {}
+        
+        if sim_scores:
+            metrics_to_log["metrics/sim"] = sum(sim_scores) / len(sim_scores)
+        
+        if pesq_scores:
+            metrics_to_log["metrics/pesq"] = sum(pesq_scores) / len(pesq_scores)
+        
+        if wer_scores:
+            metrics_to_log["metrics/wer"] = sum(wer_scores) / len(wer_scores)
+        
+        if metrics_to_log:
+            wandb.log(metrics_to_log, step=state.tracker.step)
 
     audio_dict = {"recons": recons}
     if state.tracker.step == 0:

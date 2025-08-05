@@ -116,16 +116,8 @@ train/build_dataset.folders:
 val/build_dataset.folders:
   speech_hq:
     - /data/dac/daps/val
-  music_hq:
-    - /data/dac/musdb18hq/test
-  general:
-    - /data/dac/audioset/audios/eval_segments/
 
 test/build_dataset.folders:
   speech_hq:
     - /data/dac/daps/test
-  music_hq:
-    - /data/dac/musdb18hq/test
-  general:
-    - /data/dac/audioset/audios/eval_segments/
 
