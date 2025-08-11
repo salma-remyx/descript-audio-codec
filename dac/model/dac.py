@@ -26,7 +26,7 @@ class ResidualUnit(nn.Module):
         self.block = nn.Sequential(
             RMSNorm(dim) if use_rmsnorm else nn.Identity(),
             Snake1d(dim),
-            WNConv1d(dim, dim, kernel_size=2 if causal else 3, dilation=dilation, causal=causal),
+            WNConv1d(dim, dim, kernel_size=4 if causal else 7, dilation=dilation, causal=causal),
             RMSNorm(dim) if use_rmsnorm else nn.Identity(),
             Snake1d(dim),
             WNConv1d(dim, dim, kernel_size=1, causal=causal),
@@ -44,8 +44,6 @@ class EncoderBlock(nn.Module):
     def __init__(self, input_dim: int = 16, output_dim: int = 16, stride: int = 1, causal: bool = False, use_rmsnorm: bool = True):
         super().__init__()
         self.block = nn.Sequential(
-            ResidualUnit(input_dim, dilation=1, causal=causal, use_rmsnorm=use_rmsnorm),
-            ResidualUnit(input_dim, dilation=1, causal=causal, use_rmsnorm=use_rmsnorm),
             ResidualUnit(input_dim, dilation=1, causal=causal, use_rmsnorm=use_rmsnorm),
             Snake1d(input_dim),
             WNConv1d(
@@ -72,7 +70,7 @@ class Encoder(nn.Module):
         use_rmsnorm: bool = True,
     ):
         super().__init__()
-        kernel_size = 2 if causal else 3
+        kernel_size = 4 if causal else 7
         # Create first convolution
         self.block = [WNConv1d(1, d_model, kernel_size=kernel_size, causal=causal)]
 
@@ -131,7 +129,7 @@ class Decoder(nn.Module):
         use_rmsnorm: bool = True,
     ):
         super().__init__()
-        kernel_size = 2 if causal else 3
+        kernel_size = 4 if causal else 7
 
         # Add first conv layer
         layers = [WNConv1d(input_channel, channels, kernel_size=kernel_size, causal=causal)]
@@ -169,7 +167,7 @@ class WavLMDecoder(nn.Module):
         use_rmsnorm: bool = True,
     ):
         super().__init__()
-        kernel_size = 2 if causal else 3
+        kernel_size = 4 if causal else 7
 
         # Add first conv layer
         layers = [WNConv1d(input_channel, channels, kernel_size=kernel_size, causal=causal)]
