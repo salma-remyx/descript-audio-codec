@@ -91,6 +91,9 @@ def evaluate_dataset(
 
         # Encode/decode without autocast
         z = model.encode(signal.audio_data)
+        # Older models return a tuple; use the first element as z.
+        if isinstance(z, tuple):
+            z = z[0]
         y = model.decode(z)
 
         # Prepare numpy vectors
