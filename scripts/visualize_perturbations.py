@@ -190,7 +190,7 @@ def analyze_latent_perturbations(
             
             # Extract MCD for frames around the perturbation
             for j, rel_dist in enumerate(relative_distances):
-                mel_frame_idx = np.round((pos + rel_dist) * np.prod(model.encoder_rates) / hop_length).astype(int)
+                mel_frame_idx = np.round((pos + rel_dist) * np.prod(model.encoder_strides) / hop_length).astype(int)
                 
                 mcds[j] += compute_mcd(mel_recons[:, mel_frame_idx:mel_frame_idx+1],
                                        mel_pert[:, mel_frame_idx:mel_frame_idx+1])
