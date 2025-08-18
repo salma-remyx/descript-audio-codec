@@ -1,12 +1,12 @@
 # Model setup
 DAC.sample_rate: 44100
-DAC.encoder_dim: 64
-DAC.encoder_strides: [2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2]
-DAC.encoder_multipliers: [2, 1, 1, 2, 1, 1, 2, 1, 1, 2, 1]
+DAC.encoder_dim: 16
+DAC.encoder_strides: [2, 4, 4, 4, 4, 4]
+DAC.encoder_multipliers: [2, 2, 2, 2, 2, 2]
 DAC.latent_dim: 64
 DAC.decoder_dim: 1024
-DAC.decoder_strides: [2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2]
-DAC.decoder_multipliers: [1, 2, 1, 1, 2, 1, 1, 2, 1, 1, 2]
+DAC.decoder_strides: [4, 4, 4, 4, 4, 2]
+DAC.decoder_multipliers: [2, 2, 2, 2, 2, 2]
 DAC.wavlm_decoder_strides: [2]
 DAC.wavlm_decoder_multipliers: [2]
 DAC.latent_noise_max: 0.05  # Maximum standard deviation for noise injection during training
@@ -44,7 +44,7 @@ seed: 0
 lambdas:
   adv/gen_loss: 1.0
   adv/feat_loss: 2.0
-  latents/loss: 0.5
+  latents/loss: 1.0
   mel/loss: 15.0
   wavlm/mse_loss: 5.0
   wavlm/cosine_loss: 5.0
