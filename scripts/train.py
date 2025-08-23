@@ -32,6 +32,7 @@ import wandb
 import dac
 from metrics import SIM, PESQ, WER
 
+from contextlib import contextmanager
 warnings.filterwarnings("ignore", category=UserWarning)
 
 class WandbTracker(Tracker):
@@ -150,6 +151,95 @@ def build_dataset(
     return dataset
 
 
+class EMA:
+    """Exponential Moving Average of model parameters and buffers."""
+
+    def __init__(self, model: torch.nn.Module, decay: float = 0.999, device: str = None):
+        self.decay = float(decay)
+        self.device = device
+        self.shadow_params = {}
+        self.shadow_buffers = {}
+        self.backup = {}
+        self._register(model)
+
+    @torch.no_grad()
+    def _register(self, model: torch.nn.Module):
+        for name, param in model.named_parameters():
+            if param.requires_grad:
+                v = param.detach().clone()
+                if self.device is not None:
+                    v = v.to(self.device)
+                self.shadow_params[name] = v
+        for name, buf in model.named_buffers():
+            v = buf.detach().clone()
+            if self.device is not None:
+                v = v.to(self.device)
+            self.shadow_buffers[name] = v
+
+    @torch.no_grad()
+    def update(self, model: torch.nn.Module):
+        for name, param in model.named_parameters():
+            if not param.requires_grad:
+                continue
+            if name in self.shadow_params:
+                self.shadow_params[name].lerp_(param.detach(), 1.0 - self.decay)
+        for name, buf in model.named_buffers():
+            if name in self.shadow_buffers:
+                self.shadow_buffers[name].lerp_(buf.detach(), 1.0 - self.decay)
+
+    @torch.no_grad()
+    def store(self, model: torch.nn.Module):
+        self.backup = {}
+        for name, param in model.named_parameters():
+            self.backup[name] = param.detach().clone()
+        for name, buf in model.named_buffers():
+            self.backup[f"buffer::{name}"] = buf.detach().clone()
+
+    @torch.no_grad()
+    def copy_to(self, model: torch.nn.Module):
+        for name, param in model.named_parameters():
+            if name in self.shadow_params:
+                param.data.copy_(self.shadow_params[name].data)
+        for name, buf in model.named_buffers():
+            if name in self.shadow_buffers:
+                buf.data.copy_(self.shadow_buffers[name].data)
+
+    @torch.no_grad()
+    def restore(self, model: torch.nn.Module):
+        if not self.backup:
+            return
+        for name, param in model.named_parameters():
+            if name in self.backup:
+                param.data.copy_(self.backup[name].data)
+        for name, buf in model.named_buffers():
+            bname = f"buffer::{name}"
+            if bname in self.backup:
+                buf.data.copy_(self.backup[bname].data)
+        self.backup = {}
+
+    @contextmanager
+    def average_parameters(self, model: torch.nn.Module):
+        self.store(model)
+        self.copy_to(model)
+        try:
+            yield
+        finally:
+            self.restore(model)
+
+    def state_dict(self) -> dict:
+        return {
+            "decay": self.decay,
+            "shadow_params": {k: v.cpu() for k, v in self.shadow_params.items()},
+            "shadow_buffers": {k: v.cpu() for k, v in self.shadow_buffers.items()},
+        }
+
+    def load_state_dict(self, state: dict):
+        self.decay = float(state.get("decay", self.decay))
+        for k, v in state.get("shadow_params", {}).items():
+            self.shadow_params[k] = v.to(self.device) if self.device is not None else v
+        for k, v in state.get("shadow_buffers", {}).items():
+            self.shadow_buffers[k] = v.to(self.device) if self.device is not None else v
+
 @dataclass
 class State:
     generator: DAC
@@ -171,6 +261,8 @@ class State:
     val_data: AudioDataset
 
     tracker: Tracker
+    ema: EMA = None
+    latents_warmup_steps: int = 10000
     
     # Audio quality metrics
     sim_metric: SIM = None
@@ -244,6 +336,12 @@ def load(
     l2_latents = losses.L2LatentsLoss()
     wavlm_loss = losses.WavLMLoss(device=accel.device)
     
+    # EMA setup: enabled iff ema_decay > 0
+    ema_decay = float(args.get("ema_decay", 0.999))
+    ema = None
+    if ema_decay > 0.0:
+        ema = EMA(accel.unwrap(generator), decay=ema_decay, device=None)
+
     # Initialize metrics (only on rank 0 to save memory)
     if accel.local_rank == 0:
         sim_metric = None #SIM(device=accel.device)
@@ -251,7 +349,15 @@ def load(
         wer_metric = WER(device=accel.device)
     else:
         sim_metric = pesq_metric = wer_metric = None
-    
+    # Load EMA state if resuming
+    if resume and ema is not None and "ema.pth" in g_extra:
+        try:
+            ema.load_state_dict(g_extra["ema.pth"])  
+        except Exception:
+            pass
+
+    latents_warmup_steps = int(args.get("latents_warmup_steps", 10000))
+
     return State(
         generator=generator,
         optimizer_g=optimizer_g,
@@ -271,6 +377,8 @@ def load(
         sim_metric=sim_metric,
         pesq_metric=pesq_metric,
         wer_metric=wer_metric,
+        ema=ema,
+        latents_warmup_steps=latents_warmup_steps,
     )
 
 
@@ -283,7 +391,11 @@ def val_loop(batch, state, accel):
         batch["signal"].clone(), **batch["transform_args"]
     )
 
-    out = state.generator(signal.audio_data, signal.sample_rate)
+    if state.ema is not None:
+        with state.ema.average_parameters(accel.unwrap(state.generator)):
+            out = state.generator(signal.audio_data, signal.sample_rate)
+    else:
+        out = state.generator(signal.audio_data, signal.sample_rate)
     recons = AudioSignal(out["audio"], signal.sample_rate)
     
     # Compute WavLM losses
@@ -311,11 +423,14 @@ def train_loop(state, batch, accel, lambdas):
             batch["signal"].clone(), **batch["transform_args"]
         )
 
-    with accel.autocast():
+    device_type = accel.device.type if hasattr(accel.device, "type") else ("cuda" if torch.cuda.is_available() else "cpu")
+    with torch.autocast(device_type=device_type, dtype=torch.bfloat16):
         out = state.generator(signal.audio_data, signal.sample_rate, training=True)
         recons = AudioSignal(out["audio"], signal.sample_rate)
+    # Cast reconstructed audio to float32 for downstream losses that rely on external libs
+    recons.audio_data = recons.audio_data.float()
 
-    with accel.autocast():
+    with torch.autocast(device_type=device_type, dtype=torch.bfloat16):
         output["adv/disc_loss"] = state.gan_loss.discriminator_loss(recons, signal)
 
     state.optimizer_d.zero_grad()
@@ -327,17 +442,28 @@ def train_loop(state, batch, accel, lambdas):
     accel.step(state.optimizer_d)
     state.scheduler_d.step()
 
-    with accel.autocast():
+    with torch.autocast(device_type=device_type, dtype=torch.bfloat16):
         output["latents/loss"] = state.l2_latents(out["z_clean"])
-        output["stft/loss"] = state.stft_loss(recons, signal)
-        output["mel/loss"] = state.mel_loss(recons, signal)
-        output["waveform/loss"] = state.waveform_loss(recons, signal)
-        output["wavlm/cosine_loss"], output["wavlm/mse_loss"] = state.wavlm_loss(out["wavlm"], signal)
         (
             output["adv/gen_loss"],
             output["adv/feat_loss"],
         ) = state.gan_loss.generator_loss(recons, signal)
-        output["loss"] = sum([v * output[k] for k, v in lambdas.items() if k in output])
+
+    # Compute spectral and waveform losses in float32-safe path (no autocast)
+    output["stft/loss"] = state.stft_loss(recons, signal)
+    output["mel/loss"] = state.mel_loss(recons, signal)
+    output["waveform/loss"] = state.waveform_loss(recons, signal)
+
+    # Compute WavLM losses in float32-safe path (no autocast)
+    output["wavlm/cosine_loss"], output["wavlm/mse_loss"] = state.wavlm_loss(out["wavlm"], signal)
+
+    # Linear warmup for latents/loss
+    curr_lambdas = dict(lambdas)
+    if "latents/loss" in curr_lambdas and state.latents_warmup_steps > 0:
+        warmup_ratio = min(1.0, max(0.0, state.tracker.step / state.latents_warmup_steps))
+        curr_lambdas["latents/loss"] = curr_lambdas["latents/loss"] * warmup_ratio
+        output["other/latents_lambda"] = torch.tensor(curr_lambdas["latents/loss"], device=signal.audio_data.device)
+    output["loss"] = sum([v * output[k] for k, v in curr_lambdas.items() if k in output])
 
     state.optimizer_g.zero_grad()
     accel.backward(output["loss"])
@@ -348,6 +474,9 @@ def train_loop(state, batch, accel, lambdas):
     accel.step(state.optimizer_g)
     state.scheduler_g.step()
     accel.update()
+
+    if state.ema is not None:
+        state.ema.update(accel.unwrap(state.generator))
 
     output["other/learning_rate"] = state.optimizer_g.param_groups[0]["lr"]
     output["other/batch_size"] = signal.batch_size * accel.world_size
@@ -373,10 +502,17 @@ def checkpoint(state, save_iters, save_path):
             "tracker.pth": state.tracker.state_dict(),
             "metadata.pth": metadata,
         }
+        # If EMA available, temporarily swap in EMA weights for saving
+        if state.ema is not None:
+            state.ema.store(accel.unwrap(state.generator))
+            state.ema.copy_to(accel.unwrap(state.generator))
+            generator_extra["ema.pth"] = state.ema.state_dict()
         accel.unwrap(state.generator).metadata = metadata
         accel.unwrap(state.generator).save_to_folder(
             f"{save_path}/{tag}", generator_extra
         )
+        if state.ema is not None:
+            state.ema.restore(accel.unwrap(state.generator))
         discriminator_extra = {
             "optimizer.pth": state.optimizer_d.state_dict(),
             "scheduler.pth": state.scheduler_d.state_dict(),
@@ -398,7 +534,11 @@ def save_samples(state, val_idx):
         batch["signal"].clone(), **batch["transform_args"]
     )
 
-    out = state.generator(signal.audio_data, signal.sample_rate)
+    if state.ema is not None:
+        with state.ema.average_parameters(accel.unwrap(state.generator)):
+            out = state.generator(signal.audio_data, signal.sample_rate)
+    else:
+        out = state.generator(signal.audio_data, signal.sample_rate)
     recons = AudioSignal(out["audio"], signal.sample_rate)
 
     # Calculate metrics between original and reconstructed audio

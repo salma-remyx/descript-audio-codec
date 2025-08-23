@@ -509,10 +509,10 @@ class WavLMLoss(nn.Module):
             Tuple of (cosine_loss, mse_loss)
         """
         
-        # Get target embeddings
-        with torch.no_grad(), torch.amp.autocast(device_type='cuda', enabled=torch.cuda.is_available()):
+        # Get target embeddings (force float32 for external libs)
+        with torch.no_grad():
             # First compute VAD on original audio
-            original_audio = target_signal.audio_data.squeeze(1)  # [B x T]
+            original_audio = target_signal.audio_data.squeeze(1).float()  # [B x T]
             
             # Skip VAD if vad_frame_samples is 0
             if self.vad_frame_samples > 0:
@@ -530,7 +530,7 @@ class WavLMLoss(nn.Module):
             
             # Get target embeddings
             target_embeddings = self.wavlm_model(**(self.feature_extractor(
-                self.resampler(original_audio).cpu().numpy(),
+                self.resampler(original_audio).float().cpu().numpy(),
                 sampling_rate=self.sample_rate,
                 return_tensors="pt"
             ).to(pred_embeddings.device))).last_hidden_state.transpose(1, 2)
@@ -547,6 +547,10 @@ class WavLMLoss(nn.Module):
                     align_corners=False
                 )
 
+        # Ensure computations are done in float32 for stability/compatibility
+        pred_embeddings_f32 = pred_embeddings.float()
+        target_embeddings = target_embeddings.float()
+
         # Compute losses with or without VAD weighting
         if self.vad_frame_samples > 0 and vad_mask is not None:
             # Compute weighted losses
@@ -554,20 +558,20 @@ class WavLMLoss(nn.Module):
             
             if speech_weight > 0:
                 # Weighted cosine similarity loss
-                cosine_sim = F.cosine_similarity(pred_embeddings, target_embeddings, dim=1)
+                cosine_sim = F.cosine_similarity(pred_embeddings_f32, target_embeddings, dim=1)
                 cosine_loss = 1 - (vad_mask.squeeze(1) * cosine_sim).sum() / speech_weight
                 
                 # Weighted MSE loss
-                mse = (pred_embeddings - target_embeddings) ** 2
-                mse_loss = (vad_mask * mse).sum() / (speech_weight * pred_embeddings.shape[1])
+                mse = (pred_embeddings_f32 - target_embeddings) ** 2
+                mse_loss = (vad_mask * mse).sum() / (speech_weight * pred_embeddings_f32.shape[1])
             else:
                 # No speech detected, return zero loss
                 cosine_loss = torch.tensor(0.0, device=pred_embeddings.device)
                 mse_loss = torch.tensor(0.0, device=pred_embeddings.device)
         else:
             # No VAD weighting - compute standard losses
-            cosine_loss = 1 - F.cosine_similarity(pred_embeddings, target_embeddings, dim=1).mean()
-            mse_loss = F.mse_loss(pred_embeddings, target_embeddings)
+            cosine_loss = 1 - F.cosine_similarity(pred_embeddings_f32, target_embeddings, dim=1).mean()
+            mse_loss = F.mse_loss(pred_embeddings_f32, target_embeddings)
         
         # Clean up
         del target_embeddings
