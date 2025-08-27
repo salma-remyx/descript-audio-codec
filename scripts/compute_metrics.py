@@ -18,8 +18,9 @@ import argbind
 import numpy as np
 import torch
 from audiotools import AudioSignal
+from audiotools.data import transforms
 
-import dac
+from dac.model import DAC
 from metrics import SIM, PESQ, WER
 from tqdm.auto import tqdm
 
@@ -50,7 +51,7 @@ def _mean_ci(values: List[float]) -> Tuple[float, float]:
 @torch.inference_mode()
 @torch.no_grad()
 def evaluate_dataset(
-    model_path: str = "",
+    model_path: Path = Path(""),
     dataset_path: str = "",
     device: str = "",
 ):
@@ -67,8 +68,8 @@ def evaluate_dataset(
     """
     device = device if device else ("cuda" if torch.cuda.is_available() else "cpu")
 
-    # Load model
-    model = dac.DAC.load(model_path)
+    # Load model package
+    model = DAC.load(model_path / "best/dac/package.pth")
     model.to(device)
     model.eval()
 
@@ -76,6 +77,10 @@ def evaluate_dataset(
     sim_metric = SIM(device=device)
     pesq_metric = PESQ()
     wer_metric = WER(device=device)
+
+    # Match training postprocess: VolumeNorm -> RescaleAudio (apply explicitly)
+    _vol_norm = transforms.VolumeNorm(db=("const", -16.0))
+    _rescale = transforms.RescaleAudio(val=1.0)
 
     sim_scores: List[float] = []
     pesq_scores: List[float] = []
@@ -88,6 +93,12 @@ def evaluate_dataset(
         if signal.sample_rate != model.sample_rate:
             signal.resample(model.sample_rate)
         signal.to(device)
+
+        # Apply same postprocess used in training via _instantiate/_transform
+        vn_params = _vol_norm._instantiate(None)
+        signal = _vol_norm._transform(signal, **vn_params)
+        rs_params = _rescale._instantiate(None)
+        signal = _rescale._transform(signal, **rs_params)
 
         # Encode/decode without autocast
         z = model.encode(signal.audio_data)

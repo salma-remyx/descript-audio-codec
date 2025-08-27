@@ -4,6 +4,7 @@ import numpy as np
 import argbind
 from pathlib import Path
 from audiotools import AudioSignal
+from audiotools.data import transforms
 from dac.model import DAC
 from scipy.fftpack import dct
 from tqdm import tqdm
@@ -56,14 +57,23 @@ def analyze_latent_perturbations(
     # Parse sample perturbations
     sample_magnitudes = [float(x.strip()) for x in sample_perturbations.split(',')] if sample_perturbations.strip() else []
     
-    # Load model and explicitly move to specified device
-    model = DAC.load(model_path / "best/dac/weights.pth")
+    # Load model package and explicitly move to specified device
+    model = DAC.load(model_path / "best/dac/package.pth")
     model.to(device)  # Explicitly move model to GPU
     model.eval()
     
     # Load and process audio
     signal = AudioSignal(audio_file)
     signal.to(device)  # This uses the model's device
+    
+    # Apply training postprocess via _instantiate/_transform: VolumeNorm -> RescaleAudio
+    _vol_norm = transforms.VolumeNorm(db=("const", -16.0))
+    _rescale = transforms.RescaleAudio(val=1.0)
+    vn_params = _vol_norm._instantiate(None)
+    signal = _vol_norm._transform(signal, **vn_params)
+    rs_params = _rescale._instantiate(None)
+    signal = _rescale._transform(signal, **rs_params)
+    # Ensure model padding behavior still applies before encoding
     signal.audio_data = model.preprocess(signal.audio_data, signal.sample_rate)
     
     # Compute original mel spectrogram
@@ -73,6 +83,8 @@ def analyze_latent_perturbations(
     # Get original latents and reconstruction
     with torch.no_grad():
         latents_orig = model.encode(signal.audio_data)
+        if isinstance(latents_orig, tuple):
+            latents_orig = latents_orig[0]
         mel_recons = AudioSignal(model.decode(latents_orig), sample_rate=signal.sample_rate).mel_spectrogram(
             n_mels=n_mels, window_length=hop_length, hop_length=hop_length).squeeze().cpu().numpy()
     
@@ -157,7 +169,7 @@ def analyze_latent_perturbations(
         # Save individual audio files from batch
         for i in range(len(batch_magnitudes)):
             perturbed_audio = AudioSignal(audio_batch[i:i+1].cpu(), sample_rate=signal.sample_rate)
-            perturbed_audio.write(output_dir / f"{audio_file.stem}_{model_path.name}_{i}.wav")
+            perturbed_audio.write(output_dir / f"{audio_file.stem}_{model_path.name}_{start_idx + i}.wav")
     
     # Collect MCD measurements for each relative frame distance
     relative_distances = list(range(-window_before, window_after + 1))
@@ -190,7 +202,11 @@ def analyze_latent_perturbations(
             
             # Extract MCD for frames around the perturbation
             for j, rel_dist in enumerate(relative_distances):
-                mel_frame_idx = np.round((pos + rel_dist) * np.prod(model.encoder_strides) / hop_length).astype(int)
+                try:
+                    encoder_strides = model.encoder_strides
+                except:
+                    encoder_strides = model.encoder_rates
+                mel_frame_idx = np.round((pos + rel_dist) * np.prod(encoder_strides) / hop_length).astype(int)
                 
                 mcds[j] += compute_mcd(mel_recons[:, mel_frame_idx:mel_frame_idx+1],
                                        mel_pert[:, mel_frame_idx:mel_frame_idx+1])

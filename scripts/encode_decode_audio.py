@@ -8,14 +8,15 @@ import argbind
 import torch
 from pathlib import Path
 from audiotools import AudioSignal
-import dac
+from audiotools.data import transforms
+from dac.model import DAC
 
 
 @argbind.bind(without_prefix=True)
 @torch.inference_mode()
 @torch.no_grad()
 def encode_decode_audio(
-    model_path: str = "",
+    model_path: Path = Path(""),
     audio_file: str = "",
     device: str = "",
 ):
@@ -35,8 +36,8 @@ def encode_decode_audio(
 
     device = device if device != "" else "cuda" if torch.cuda.is_available() else "cpu"
     
-    # Load model
-    model = dac.DAC.load(model_path)
+    # Load model package
+    model = DAC.load(model_path / "best/dac/package.pth")
     model.to(device)
     model.eval()
     
@@ -49,11 +50,20 @@ def encode_decode_audio(
     
     signal.to(device)
     
+    # Apply training-like postprocess via _instantiate/_transform: VolumeNorm -> RescaleAudio
+    _vol_norm = transforms.VolumeNorm(db=("const", -16.0))
+    _rescale = transforms.RescaleAudio(val=1.0)
+    vn_params = _vol_norm._instantiate(None)
+    signal = _vol_norm._transform(signal, **vn_params)
+    rs_params = _rescale._instantiate(None)
+    signal = _rescale._transform(signal, **rs_params)
+    
     # Encode and decode with bfloat16 autocast
     with torch.autocast(device_type=device, dtype=torch.bfloat16):
         # Encode
         z = model.encode(signal.audio_data)
-        
+        if isinstance(z, tuple):
+            z = z[0]
         # Decode
         y = model.decode(z)
     
