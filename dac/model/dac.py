@@ -41,12 +41,13 @@ class ResidualUnit(nn.Module):
 
 
 class EncoderBlock(nn.Module):
-    def __init__(self, input_dim: int = 16, output_dim: int = 16, stride: int = 1, causal: bool = False, use_rmsnorm: bool = True):
+    def __init__(self, input_dim: int = 16, output_dim: int = 16, stride: int = 1, causal: bool = False, dilate: bool = True, use_rmsnorm: bool = True):
         super().__init__()
+        dilation = (2 if causal else 3) if dilate else 1
         self.block = nn.Sequential(
             ResidualUnit(input_dim, dilation=1, causal=causal, use_rmsnorm=use_rmsnorm),
-            ResidualUnit(input_dim, dilation=1, causal=causal, use_rmsnorm=use_rmsnorm),
-            ResidualUnit(input_dim, dilation=1, causal=causal, use_rmsnorm=use_rmsnorm),
+            ResidualUnit(input_dim, dilation=dilation, causal=causal, use_rmsnorm=use_rmsnorm),
+            ResidualUnit(input_dim, dilation=dilation * dilation, causal=causal, use_rmsnorm=use_rmsnorm),
             Snake1d(input_dim),
             WNConv1d(
                 input_dim,
@@ -69,6 +70,7 @@ class Encoder(nn.Module):
         multipliers: list = [2, 4, 8, 8],
         d_latent: int = 64,
         causal: bool = False,
+        dilate: bool = True,
         use_rmsnorm: bool = True,
     ):
         super().__init__()
@@ -80,7 +82,7 @@ class Encoder(nn.Module):
         current_dim = d_model
         for stride, multiplier in zip(strides, multipliers):
             output_dim = current_dim * multiplier
-            self.block += [EncoderBlock(current_dim, output_dim, stride=stride, causal=causal, use_rmsnorm=use_rmsnorm)]
+            self.block += [EncoderBlock(current_dim, output_dim, stride=stride, causal=causal, dilate=dilate, use_rmsnorm=use_rmsnorm)]
             current_dim = output_dim
 
         # Create last convolution
@@ -99,8 +101,9 @@ class Encoder(nn.Module):
 
 
 class DecoderBlock(nn.Module):
-    def __init__(self, input_dim: int = 16, output_dim: int = 8, stride: int = 1, causal: bool = False, use_rmsnorm: bool = True):
+    def __init__(self, input_dim: int = 16, output_dim: int = 8, stride: int = 1, causal: bool = False, dilate: bool = True, use_rmsnorm: bool = True):
         super().__init__()
+        dilation = (2 if causal else 3) if dilate else 1
         self.block = nn.Sequential(
             Snake1d(input_dim),
             WNConvTranspose1d(
@@ -111,8 +114,8 @@ class DecoderBlock(nn.Module):
                 causal=causal,
             ),
             ResidualUnit(output_dim, dilation=1, causal=causal, use_rmsnorm=use_rmsnorm),
-            ResidualUnit(output_dim, dilation=1, causal=causal, use_rmsnorm=use_rmsnorm),
-            ResidualUnit(output_dim, dilation=1, causal=causal, use_rmsnorm=use_rmsnorm),
+            ResidualUnit(output_dim, dilation=dilation, causal=causal, use_rmsnorm=use_rmsnorm),
+            ResidualUnit(output_dim, dilation=dilation * dilation, causal=causal, use_rmsnorm=use_rmsnorm),
         )
 
     def forward(self, x):
@@ -128,6 +131,7 @@ class Decoder(nn.Module):
         multipliers,
         d_out: int = 1,
         causal: bool = False,
+        dilate: bool = True,
         use_rmsnorm: bool = True,
     ):
         super().__init__()
@@ -140,7 +144,7 @@ class Decoder(nn.Module):
         input_dim = channels
         for stride, multiplier in zip(strides, multipliers):
             output_dim = input_dim // multiplier
-            layers += [DecoderBlock(input_dim, output_dim, stride, causal=causal, use_rmsnorm=use_rmsnorm)]
+            layers += [DecoderBlock(input_dim, output_dim, stride, causal=causal, dilate=dilate, use_rmsnorm=use_rmsnorm)]
             input_dim = output_dim
 
         # Add final conv layer
@@ -166,6 +170,7 @@ class WavLMDecoder(nn.Module):
         multipliers: List[int] = [],
         d_out: int = 1024,
         causal: bool = False,
+        dilate: bool = True,
         use_rmsnorm: bool = True,
     ):
         super().__init__()
@@ -178,7 +183,7 @@ class WavLMDecoder(nn.Module):
         input_dim = channels
         for stride, multiplier in zip(strides, multipliers):
             output_dim = input_dim // multiplier
-            layers += [DecoderBlock(input_dim, output_dim, stride, causal=causal, use_rmsnorm=use_rmsnorm)]
+            layers += [DecoderBlock(input_dim, output_dim, stride, causal=causal, dilate=dilate, use_rmsnorm=use_rmsnorm)]
             input_dim = output_dim
 
         # Add final conv layers
@@ -209,6 +214,7 @@ class DAC(BaseModel, CodecMixin):
         latent_noise_max: float = 0.05,  # Maximum standard deviation for noise injection
         sample_rate: int = 44100,
         causal: bool = False,
+        dilate: bool = True,
         use_rmsnorm: bool = True,
     ):
         super().__init__()
@@ -228,7 +234,7 @@ class DAC(BaseModel, CodecMixin):
         self.latent_dim = latent_dim
 
         self.hop_length = np.prod(encoder_strides)
-        self.encoder = Encoder(encoder_dim, encoder_strides, encoder_multipliers, latent_dim, causal=causal, use_rmsnorm=use_rmsnorm)
+        self.encoder = Encoder(encoder_dim, encoder_strides, encoder_multipliers, latent_dim, causal=causal, dilate=dilate, use_rmsnorm=use_rmsnorm)
 
         self.decoder = Decoder(
             latent_dim,
@@ -236,6 +242,7 @@ class DAC(BaseModel, CodecMixin):
             decoder_strides,
             decoder_multipliers,
             causal=causal,
+            dilate=dilate,
             use_rmsnorm=use_rmsnorm,
         )
         self.wavlm_decoder = WavLMDecoder(
@@ -244,6 +251,7 @@ class DAC(BaseModel, CodecMixin):
             wavlm_decoder_strides,
             wavlm_decoder_multipliers,
             causal=causal,
+            dilate=dilate,
             use_rmsnorm=use_rmsnorm,
         )
         self.sample_rate = sample_rate
