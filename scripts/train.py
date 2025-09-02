@@ -33,6 +33,7 @@ import dac
 from metrics import SIM, PESQ, WER
 
 from contextlib import contextmanager
+from contextlib import nullcontext
 warnings.filterwarnings("ignore", category=UserWarning)
 
 class WandbTracker(Tracker):
@@ -269,6 +270,9 @@ class State:
     pesq_metric: PESQ = None
     wer_metric: WER = None
 
+    # Mixed precision bfloat16
+    bfloat: bool = False
+
 
 @argbind.bind(without_prefix=True)
 def load(
@@ -357,6 +361,8 @@ def load(
             pass
 
     latents_warmup_steps = int(args.get("latents_warmup_steps", 10000))
+    # bfloat16 flag picked from config (defaults to False)
+    bfloat_flag = bool(args.get("bfloat", False))
 
     return State(
         generator=generator,
@@ -379,6 +385,7 @@ def load(
         wer_metric=wer_metric,
         ema=ema,
         latents_warmup_steps=latents_warmup_steps,
+        bfloat=bfloat_flag,
     )
 
 
@@ -424,13 +431,13 @@ def train_loop(state, batch, accel, lambdas):
         )
 
     device_type = accel.device.type if hasattr(accel.device, "type") else ("cuda" if torch.cuda.is_available() else "cpu")
-    with torch.autocast(device_type=device_type, dtype=torch.bfloat16):
+    with (torch.autocast(device_type=device_type, dtype=torch.bfloat16) if state.bfloat else nullcontext()):
         out = state.generator(signal.audio_data, signal.sample_rate, training=True)
         recons = AudioSignal(out["audio"], signal.sample_rate)
     # Cast reconstructed audio to float32 for downstream losses that rely on external libs
     recons.audio_data = recons.audio_data.float()
 
-    with torch.autocast(device_type=device_type, dtype=torch.bfloat16):
+    with (torch.autocast(device_type=device_type, dtype=torch.bfloat16) if state.bfloat else nullcontext()):
         output["adv/disc_loss"] = state.gan_loss.discriminator_loss(recons, signal)
 
     state.optimizer_d.zero_grad()
@@ -442,7 +449,7 @@ def train_loop(state, batch, accel, lambdas):
     accel.step(state.optimizer_d)
     state.scheduler_d.step()
 
-    with torch.autocast(device_type=device_type, dtype=torch.bfloat16):
+    with (torch.autocast(device_type=device_type, dtype=torch.bfloat16) if state.bfloat else nullcontext()):
         output["latents/loss"] = state.l2_latents(out["z_clean"])
         (
             output["adv/gen_loss"],

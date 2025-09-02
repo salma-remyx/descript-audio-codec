@@ -32,7 +32,7 @@ AdamW.lr: 0.0001
 ExponentialLR.gamma: 0.999996
 Accelerator.gradient_accumulation_steps: 1
 
-amp: false
+bfloat: false
 val_batch_size: 100
 device: cuda
 num_iters: 250000
@@ -54,7 +54,7 @@ lambdas:
 ema_decay: 0.999
 
 # Linear warmup steps for latents/loss lambda
-latents_warmup_steps: 30000
+latents_warmup_steps: 40000
 
 VolumeNorm.db: [const, -16]
 
