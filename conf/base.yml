@@ -11,7 +11,7 @@ DAC.wavlm_decoder_strides: [2]
 DAC.wavlm_decoder_multipliers: [2]
 DAC.latent_noise_max: 0.2  # Maximum standard deviation for noise injection during training
 DAC.causal: true
-DAC.dilate: false
+DAC.dilate: true
 DAC.use_rmsnorm: true
 
 # Discriminator
