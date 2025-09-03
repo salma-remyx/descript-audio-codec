@@ -1,12 +1,11 @@
 import torch
-import matplotlib.pyplot as plt
-import numpy as np
 import argbind
 from pathlib import Path
+
 from audiotools import AudioSignal
 from audiotools.data import transforms
 from dac.model import DAC
-from sklearn.decomposition import PCA
+from metrics.eval_utils import visualize_latents_with_pca
 
 @argbind.bind(without_prefix=True)
 def visualize(
@@ -45,40 +44,18 @@ def visualize(
         if isinstance(latents, tuple):
             latents = latents[0]
     
-    # Compute mel spectrogram
-    mel_spec = signal.mel_spectrogram(n_mels=n_components, window_length=4096, hop_length=2048).squeeze().cpu().numpy()
-    
-    # Perform PCA on latents
-    latents = latents.squeeze().cpu().numpy()  # [n_frames, n_dims]
-    if pca:
-        pca = PCA(n_components=n_components)
-        latents = pca.fit_transform(latents.T).T  # [n_components, n_frames]
+    # Generate and save visualization
+    output_path = audio_file.parent / f"latents_{model_path.name}{'_pca' if pca else ''}.svg"
+    visualize_latents_with_pca(
+        signal, 
+        latents, 
+        n_components=n_components,
+        perform_pca=pca,
+        output_path=output_path
+    )
 
-    # Create figure with two subplots
-    _, (ax1, ax2) = plt.subplots(2, 1, sharex=True)
-    
-    # Plot mel spectrogram
-    ax1.imshow(
-        np.log(mel_spec + 1e-8), 
-        aspect='auto', 
-        origin='lower',
-        extent=[0, signal.signal_duration, 0, mel_spec.shape[0]]
-    )
-    
-    # Plot PCA components
-    ax2.imshow(
-        latents,
-        aspect='auto',
-        origin='lower',
-        extent=[0, signal.signal_duration, 0, latents.shape[0]]
-    )
-    ax2.set_xlabel('Time (s)')
-    
-    plt.tight_layout()
-    plt.savefig(audio_file.parent / f"latents_{model_path.name}{'_pca' if pca else ''}.svg", format='svg')
-    plt.close()
 
 if __name__ == "__main__":
     args = argbind.parse_args()
     with argbind.scope(args):
-        visualize() 
+        visualize()

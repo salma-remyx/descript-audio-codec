@@ -31,6 +31,10 @@ import wandb
 
 import dac
 from metrics import SIM, PESQ, WER
+from metrics.eval_utils import (
+    compute_condition_number,
+    save_evaluation_plots_to_wandb,
+)
 
 from contextlib import contextmanager
 from contextlib import nullcontext
@@ -401,12 +405,25 @@ def val_loop(batch, state, accel):
     if state.ema is not None:
         with state.ema.average_parameters(accel.unwrap(state.generator)):
             out = state.generator(signal.audio_data, signal.sample_rate)
+            latents = state.generator.encode(signal.audio_data)
     else:
         out = state.generator(signal.audio_data, signal.sample_rate)
+        latents = state.generator.encode(signal.audio_data)
+    
+    if isinstance(latents, tuple):
+        latents = latents[0]
+    
     recons = AudioSignal(out["audio"], signal.sample_rate)
     
     # Compute WavLM losses
     wavlm_cosine_loss, wavlm_mse_loss = state.wavlm_loss(out["wavlm"], signal)
+    
+    # Compute average condition number for the batch
+    condition_numbers = []
+    for i in range(latents.shape[0]):
+        cond_num, _, _, _ = compute_condition_number(latents[i:i+1])
+        condition_numbers.append(cond_num)
+    avg_condition_number = sum(condition_numbers) / len(condition_numbers) if condition_numbers else 0
     
     return {
         "loss": state.mel_loss(recons, signal),
@@ -415,6 +432,7 @@ def val_loop(batch, state, accel):
         "waveform/loss": state.waveform_loss(recons, signal),
         "wavlm/cosine_loss": wavlm_cosine_loss,
         "wavlm/mse_loss": wavlm_mse_loss,
+        "condition_number": torch.tensor(avg_condition_number, device=signal.audio_data.device),
     }
 
 
@@ -544,8 +562,16 @@ def save_samples(state, val_idx):
     if state.ema is not None:
         with state.ema.average_parameters(accel.unwrap(state.generator)):
             out = state.generator(signal.audio_data, signal.sample_rate)
+            # Also get latents for evaluation
+            latents = state.generator.encode(signal.audio_data)
+            if isinstance(latents, tuple):
+                latents = latents[0]
     else:
         out = state.generator(signal.audio_data, signal.sample_rate)
+        # Also get latents for evaluation
+        latents = state.generator.encode(signal.audio_data)
+        if isinstance(latents, tuple):
+            latents = latents[0]
     recons = AudioSignal(out["audio"], signal.sample_rate)
 
     # Calculate metrics between original and reconstructed audio
@@ -596,6 +622,27 @@ def save_samples(state, val_idx):
         
         if metrics_to_log:
             wandb.log(metrics_to_log, step=state.tracker.step)
+
+    # Generate evaluation plots for each sample
+    for i in range(signal.batch_size):
+        # Get individual signal and latents
+        signal_i = signal[i]
+        latents_i = latents[:, :, :]  # Keep batch dim for compatibility
+        if i < latents.shape[0]:
+            latents_i = latents[i:i+1, :, :]
+        
+        # Save evaluation plots to wandb
+        save_evaluation_plots_to_wandb(
+            accel.unwrap(state.generator), 
+            signal_i, 
+            latents_i, 
+            step=state.tracker.step,
+            prefix=f"eval/sample_{i}"
+        )
+        
+        # Also compute and log individual condition numbers
+        cond_number, _, _, _ = compute_condition_number(latents_i)
+        wandb.log({f"eval/sample_{i}/condition_number": cond_number}, step=state.tracker.step)
 
     audio_dict = {"recons": recons}
     if state.tracker.step == 0:
