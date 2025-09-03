@@ -6,6 +6,7 @@ import torch
 from audiotools import AudioSignal
 from audiotools.ml import BaseModel
 from torch import nn
+import torch.nn.functional as F
 
 from .base import CodecMixin
 from dac.nn.layers import RMSNorm
@@ -18,6 +19,60 @@ def init_weights(m):
     if isinstance(m, nn.Conv1d):
         nn.init.trunc_normal_(m.weight, std=0.02)
         nn.init.constant_(m.bias, 0)
+
+
+def match_channels(x: torch.Tensor, target_channels: int) -> torch.Tensor:
+    """Match channel dimension using parameter-free operations (mean or repeat).
+    
+    Args:
+        x: Input tensor of shape (B, C, T)
+        target_channels: Target number of channels
+        
+    Returns:
+        Tensor with shape (B, target_channels, T)
+    """
+    B, C, T = x.shape
+    
+    if C == target_channels:
+        return x
+    elif C > target_channels:
+        # Use mean to reduce channels
+        group_size = C // target_channels
+        if C % target_channels == 0:
+            # Perfect division - reshape and mean
+            x = x.view(B, target_channels, group_size, T)
+            x = x.mean(dim=2)
+        else:
+            # Not perfect division - take first target_channels
+            x = x[:, :target_channels, :]
+    else:  # C < target_channels
+        # Repeat to expand channels
+        repeat_factor = target_channels // C
+        x = x.repeat(1, repeat_factor, 1)
+        # Handle any remaining channels
+        if x.shape[1] < target_channels:
+            extra = target_channels - x.shape[1]
+            x = torch.cat([x, x[:, :extra]], dim=1)
+    
+    return x
+
+
+def match_time_dimension(x: torch.Tensor, target_length: int) -> torch.Tensor:
+    """Match time dimension by truncating or padding.
+    
+    Args:
+        x: Input tensor of shape (B, C, T)
+        target_length: Target time dimension
+        
+    Returns:
+        Tensor with shape (B, C, target_length)
+    """
+    if x.shape[-1] > target_length:
+        return x[..., :target_length]
+    elif x.shape[-1] < target_length:
+        return F.pad(x, (0, target_length - x.shape[-1]))
+    else:
+        return x
 
 
 class ResidualUnit(nn.Module):
@@ -41,9 +96,13 @@ class ResidualUnit(nn.Module):
 
 
 class EncoderBlock(nn.Module):
-    def __init__(self, input_dim: int = 16, output_dim: int = 16, stride: int = 1, causal: bool = False, dilate: bool = True, use_rmsnorm: bool = True):
+    def __init__(self, input_dim: int = 16, output_dim: int = 16, stride: int = 1, causal: bool = False, dilate: bool = True, use_rmsnorm: bool = True, use_residual: bool = False):
         super().__init__()
         dilation = (2 if causal else 3) if dilate else 1
+        self.stride = stride
+        self.use_residual = use_residual
+        self.output_dim = output_dim
+        
         self.block = nn.Sequential(
             ResidualUnit(input_dim, dilation=1, causal=causal, use_rmsnorm=use_rmsnorm),
             ResidualUnit(input_dim, dilation=dilation, causal=causal, use_rmsnorm=use_rmsnorm),
@@ -59,7 +118,33 @@ class EncoderBlock(nn.Module):
         )
 
     def forward(self, x):
-        return self.block(x)
+        out = self.block(x)
+        
+        if self.use_residual and self.stride > 1:
+            # DC-AE style residual: parameter-free transformation
+            B, C, T = x.shape
+            
+            # Time-to-Channel transformation via reshape
+            # Pad if necessary to make T divisible by stride
+            if T % self.stride != 0:
+                pad_amount = self.stride - (T % self.stride)
+                x_padded = F.pad(x, (0, pad_amount))
+                T_padded = T + pad_amount
+            else:
+                x_padded = x
+                T_padded = T
+                
+            # Reshape: (B, C, T) -> (B, C, T/stride, stride) -> (B, C*stride, T/stride)
+            residual = x_padded.view(B, C, T_padded // self.stride, self.stride)
+            residual = residual.permute(0, 1, 3, 2).reshape(B, C * self.stride, T_padded // self.stride)
+            
+            # Match channel and time dimensions
+            residual = match_channels(residual, self.output_dim)
+            residual = match_time_dimension(residual, out.shape[-1])
+                
+            out = out + residual
+            
+        return out
 
 
 class Encoder(nn.Module):
@@ -72,6 +157,7 @@ class Encoder(nn.Module):
         causal: bool = False,
         dilate: bool = True,
         use_rmsnorm: bool = True,
+        use_residual: bool = False,
     ):
         super().__init__()
         kernel_size = 4 if causal else 7
@@ -82,7 +168,7 @@ class Encoder(nn.Module):
         current_dim = d_model
         for stride, multiplier in zip(strides, multipliers):
             output_dim = current_dim * multiplier
-            self.block += [EncoderBlock(current_dim, output_dim, stride=stride, causal=causal, dilate=dilate, use_rmsnorm=use_rmsnorm)]
+            self.block += [EncoderBlock(current_dim, output_dim, stride=stride, causal=causal, dilate=dilate, use_rmsnorm=use_rmsnorm, use_residual=use_residual)]
             current_dim = output_dim
 
         # Create last convolution
@@ -101,9 +187,13 @@ class Encoder(nn.Module):
 
 
 class DecoderBlock(nn.Module):
-    def __init__(self, input_dim: int = 16, output_dim: int = 8, stride: int = 1, causal: bool = False, dilate: bool = True, use_rmsnorm: bool = True):
+    def __init__(self, input_dim: int = 16, output_dim: int = 8, stride: int = 1, causal: bool = False, dilate: bool = True, use_rmsnorm: bool = True, use_residual: bool = False):
         super().__init__()
         dilation = (2 if causal else 3) if dilate else 1
+        self.stride = stride
+        self.use_residual = use_residual
+        self.output_dim = output_dim
+        
         self.block = nn.Sequential(
             Snake1d(input_dim),
             WNConvTranspose1d(
@@ -119,7 +209,26 @@ class DecoderBlock(nn.Module):
         )
 
     def forward(self, x):
-        return self.block(x)
+        out = self.block(x)
+        
+        if self.use_residual and self.stride > 1:
+            # DC-AE style residual: parameter-free transformation
+            B, _, T = x.shape
+            
+            # Match channels first
+            residual = match_channels(x, self.output_dim)
+            
+            # Channel-to-Time transformation: simple repeat for upsampling
+            B, C_res, T = residual.shape
+            residual = residual.unsqueeze(-1).repeat(1, 1, 1, self.stride)
+            residual = residual.view(B, C_res, T * self.stride)
+            
+            # Match time dimension
+            residual = match_time_dimension(residual, out.shape[-1])
+                
+            out = out + residual
+            
+        return out
 
 
 class Decoder(nn.Module):
@@ -133,6 +242,7 @@ class Decoder(nn.Module):
         causal: bool = False,
         dilate: bool = True,
         use_rmsnorm: bool = True,
+        use_residual: bool = False,
     ):
         super().__init__()
         kernel_size = 4 if causal else 7
@@ -144,7 +254,7 @@ class Decoder(nn.Module):
         input_dim = channels
         for stride, multiplier in zip(strides, multipliers):
             output_dim = input_dim // multiplier
-            layers += [DecoderBlock(input_dim, output_dim, stride, causal=causal, dilate=dilate, use_rmsnorm=use_rmsnorm)]
+            layers += [DecoderBlock(input_dim, output_dim, stride, causal=causal, dilate=dilate, use_rmsnorm=use_rmsnorm, use_residual=use_residual)]
             input_dim = output_dim
 
         # Add final conv layer
@@ -172,6 +282,7 @@ class WavLMDecoder(nn.Module):
         causal: bool = False,
         dilate: bool = True,
         use_rmsnorm: bool = True,
+        use_residual: bool = False,
     ):
         super().__init__()
         kernel_size = 4 if causal else 7
@@ -183,7 +294,7 @@ class WavLMDecoder(nn.Module):
         input_dim = channels
         for stride, multiplier in zip(strides, multipliers):
             output_dim = input_dim // multiplier
-            layers += [DecoderBlock(input_dim, output_dim, stride, causal=causal, dilate=dilate, use_rmsnorm=use_rmsnorm)]
+            layers += [DecoderBlock(input_dim, output_dim, stride, causal=causal, dilate=dilate, use_rmsnorm=use_rmsnorm, use_residual=use_residual)]
             input_dim = output_dim
 
         # Add final conv layers
@@ -216,6 +327,7 @@ class DAC(BaseModel, CodecMixin):
         causal: bool = False,
         dilate: bool = True,
         use_rmsnorm: bool = True,
+        use_residual: bool = False,  # DC-AE inspired residual connections
     ):
         super().__init__()
 
@@ -234,7 +346,7 @@ class DAC(BaseModel, CodecMixin):
         self.latent_dim = latent_dim
 
         self.hop_length = np.prod(encoder_strides)
-        self.encoder = Encoder(encoder_dim, encoder_strides, encoder_multipliers, latent_dim, causal=causal, dilate=dilate, use_rmsnorm=use_rmsnorm)
+        self.encoder = Encoder(encoder_dim, encoder_strides, encoder_multipliers, latent_dim, causal=causal, dilate=dilate, use_rmsnorm=use_rmsnorm, use_residual=use_residual)
 
         self.decoder = Decoder(
             latent_dim,
@@ -244,6 +356,7 @@ class DAC(BaseModel, CodecMixin):
             causal=causal,
             dilate=dilate,
             use_rmsnorm=use_rmsnorm,
+            use_residual=use_residual,
         )
         self.wavlm_decoder = WavLMDecoder(
             latent_dim,
@@ -253,6 +366,7 @@ class DAC(BaseModel, CodecMixin):
             causal=causal,
             dilate=dilate,
             use_rmsnorm=use_rmsnorm,
+            use_residual=use_residual,
         )
         self.sample_rate = sample_rate
         self.apply(init_weights)
@@ -266,7 +380,7 @@ class DAC(BaseModel, CodecMixin):
 
         length = audio_data.shape[-1]
         right_pad = math.ceil(length / self.hop_length) * self.hop_length - length
-        audio_data = nn.functional.pad(audio_data, (0, right_pad))
+        audio_data = F.pad(audio_data, (0, right_pad))
 
         return audio_data
 

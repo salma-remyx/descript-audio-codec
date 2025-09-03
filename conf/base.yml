@@ -13,6 +13,7 @@ DAC.latent_noise_max: 0.2  # Maximum standard deviation for noise injection duri
 DAC.causal: true
 DAC.dilate: true
 DAC.use_rmsnorm: true
+DAC.use_residual: false  # DC-AE inspired parameter-free residual connections
 
 # Discriminator
 Discriminator.sample_rate: 44100
@@ -54,7 +55,7 @@ lambdas:
 ema_decay: 0.999
 
 # Linear warmup steps for latents/loss lambda
-latents_warmup_steps: 40000
+latents_warmup_steps: 30000
 
 VolumeNorm.db: [const, -16]
 
