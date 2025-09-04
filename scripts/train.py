@@ -405,10 +405,10 @@ def val_loop(batch, state, accel):
     if state.ema is not None:
         with state.ema.average_parameters(accel.unwrap(state.generator)):
             out = state.generator(signal.audio_data, signal.sample_rate)
-            latents = state.generator.encode(signal.audio_data)
+            latents = accel.unwrap(state.generator).encode(signal.audio_data)
     else:
         out = state.generator(signal.audio_data, signal.sample_rate)
-        latents = state.generator.encode(signal.audio_data)
+        latents = accel.unwrap(state.generator).encode(signal.audio_data)
     
     if isinstance(latents, tuple):
         latents = latents[0]
@@ -563,13 +563,13 @@ def save_samples(state, val_idx):
         with state.ema.average_parameters(accel.unwrap(state.generator)):
             out = state.generator(signal.audio_data, signal.sample_rate)
             # Also get latents for evaluation
-            latents = state.generator.encode(signal.audio_data)
+            latents = accel.unwrap(state.generator).encode(signal.audio_data)
             if isinstance(latents, tuple):
                 latents = latents[0]
     else:
         out = state.generator(signal.audio_data, signal.sample_rate)
         # Also get latents for evaluation
-        latents = state.generator.encode(signal.audio_data)
+        latents = accel.unwrap(state.generator).encode(signal.audio_data)
         if isinstance(latents, tuple):
             latents = latents[0]
     recons = AudioSignal(out["audio"], signal.sample_rate)
