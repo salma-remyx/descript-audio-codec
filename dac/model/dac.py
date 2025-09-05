@@ -417,7 +417,7 @@ class DAC(BaseModel, CodecMixin):
         causal: bool = False,
         dilate: bool = True,
         use_rmsnorm: bool = True,
-        use_residual: bool = False,  # DC-AE inspired residual connections
+        use_residual: bool = False,  # DC-AE inspired residual connections with progressive channel dropout
     ):
         super().__init__()
 
@@ -429,6 +429,7 @@ class DAC(BaseModel, CodecMixin):
         self.decoder_multipliers = decoder_multipliers
         self.sample_rate = sample_rate
         self.latent_noise_max = latent_noise_max
+        self.use_residual = use_residual
 
         if latent_dim is None:
             latent_dim = encoder_dim * np.prod(encoder_multipliers)
@@ -528,7 +529,10 @@ class DAC(BaseModel, CodecMixin):
         training : bool, optional
             Whether in training mode, by default False
             If True, injects random Gaussian noise to the latents with std
-            uniformly sampled from [0, latent_noise_max]
+            uniformly sampled from [0, latent_noise_max].
+            Additionally, if use_residual is True, applies progressive channel 
+            dropout (DC-AE 1.5 style) by randomly zeroing out channels after a 
+            randomly selected cutoff point to encourage structured latent space.
 
         Returns
         -------
@@ -550,6 +554,17 @@ class DAC(BaseModel, CodecMixin):
         if training:
             # Add Gaussian noise with random std between 0 and latent_noise_max
             z = z_clean + torch.randn_like(z_clean) * torch.rand(z_clean.shape[0], 1, 1, device=z_clean.device) * self.latent_noise_max
+            
+            # Apply progressive channel dropout if use_residual is enabled (DC-AE 1.5 style)
+            if self.use_residual:
+                # Randomly select a channel cutoff for each sample in the batch
+                cutoff_channels = torch.randint(0, z.shape[1], (z.shape[0],), device=z.device)
+                
+                # Create a mask that zeros out channels after the cutoff
+                channel_mask = (torch.arange(z.shape[1], device=z.device).unsqueeze(0) <= cutoff_channels.unsqueeze(1)).unsqueeze(-1).float()
+                
+                # Apply the mask to zero out channels after the cutoff
+                z = z * channel_mask
         else:
             z = z_clean
             
