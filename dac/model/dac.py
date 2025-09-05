@@ -161,29 +161,58 @@ class Encoder(nn.Module):
     ):
         super().__init__()
         kernel_size = 4 if causal else 7
-        # Create first convolution
-        self.block = [WNConv1d(1, d_model, kernel_size=kernel_size, causal=causal)]
+        self.use_residual = use_residual
+        self.d_latent = d_latent
+        self.d_model = d_model
+        
+        # Create first convolution separately
+        self.first_conv = WNConv1d(1, d_model, kernel_size=kernel_size, causal=causal)
 
         # Create EncoderBlocks that increase channels by multipliers as they downsample by strides
+        self.block = []
         current_dim = d_model
         for stride, multiplier in zip(strides, multipliers):
             output_dim = current_dim * multiplier
             self.block += [EncoderBlock(current_dim, output_dim, stride=stride, causal=causal, dilate=dilate, use_rmsnorm=use_rmsnorm, use_residual=use_residual)]
             current_dim = output_dim
 
-        # Create last convolution
-        self.block += [
-            RMSNorm(current_dim) if use_rmsnorm else nn.Identity(),
-            Snake1d(current_dim),
-            WNConv1d(current_dim, d_latent, kernel_size=kernel_size, causal=causal),
-        ]
-
-        # Wrap black into nn.Sequential
+        # Add RMSNorm and Snake1d to block only when not using residual
+        if not use_residual:
+            self.block += [
+                RMSNorm(current_dim) if use_rmsnorm else nn.Identity(),
+                Snake1d(current_dim),
+            ]
+        
+        # Wrap blocks into nn.Sequential
         self.block = nn.Sequential(*self.block)
         self.enc_dim = current_dim
+        
+        # Always create the final convolution
+        self.final_conv = WNConv1d(current_dim, d_latent, kernel_size=kernel_size, causal=causal)
 
     def forward(self, x):
-        return self.block(x)
+        # Apply first convolution
+        out = self.first_conv(x)
+        
+        if self.use_residual:
+            # Add residual connection for first conv
+            residual = match_channels(x, self.d_model)
+            residual = match_time_dimension(residual, out.shape[-1])
+            out = out + residual
+        
+        # Process through main blocks
+        features = self.block(out)
+        
+        # Apply final conv
+        out = self.final_conv(features)
+        
+        if self.use_residual:
+            # Add residual connection for final conv
+            residual = match_channels(features, self.d_latent)
+            residual = match_time_dimension(residual, out.shape[-1])
+            out = out + residual
+        
+        return out
 
 
 class DecoderBlock(nn.Module):
@@ -246,29 +275,59 @@ class Decoder(nn.Module):
     ):
         super().__init__()
         kernel_size = 4 if causal else 7
+        self.use_residual = use_residual
+        self.d_out = d_out
+        self.channels = channels
 
-        # Add first conv layer
-        layers = [WNConv1d(input_channel, channels, kernel_size=kernel_size, causal=causal)]
+        # Create first conv layer separately
+        self.first_conv = WNConv1d(input_channel, channels, kernel_size=kernel_size, causal=causal)
 
         # Add upsampling + MRF blocks
+        layers = []
         input_dim = channels
         for stride, multiplier in zip(strides, multipliers):
             output_dim = input_dim // multiplier
             layers += [DecoderBlock(input_dim, output_dim, stride, causal=causal, dilate=dilate, use_rmsnorm=use_rmsnorm, use_residual=use_residual)]
             input_dim = output_dim
 
-        # Add final conv layer
-        layers += [
-            RMSNorm(output_dim) if use_rmsnorm else nn.Identity(),
-            Snake1d(output_dim),
-            WNConv1d(output_dim, d_out, kernel_size=kernel_size, causal=causal),
-            nn.Tanh(),
-        ]
-
-        self.model = nn.Sequential(*layers)
+        # Add RMSNorm and Snake1d to layers only when not using residual
+        if not use_residual:
+            layers += [
+                RMSNorm(output_dim) if use_rmsnorm else nn.Identity(),
+                Snake1d(output_dim),
+            ]
+        
+        # Wrap layers into nn.Sequential
+        self.main_layers = nn.Sequential(*layers)
+        
+        # Always create the final convolution and tanh
+        self.final_conv = WNConv1d(output_dim, d_out, kernel_size=kernel_size, causal=causal)
+        self.tanh = nn.Tanh()
 
     def forward(self, x):
-        return self.model(x)
+        # Apply first convolution
+        out = self.first_conv(x)
+        
+        if self.use_residual:
+            # Add residual connection for first conv
+            residual = match_channels(x, self.channels)
+            residual = match_time_dimension(residual, out.shape[-1])
+            out = out + residual
+        
+        # Process through main layers
+        features = self.main_layers(out)
+        
+        # Apply final conv
+        out = self.final_conv(features)
+        
+        if self.use_residual:
+            # Add residual connection for final conv
+            residual = match_channels(features, self.d_out)
+            residual = match_time_dimension(residual, out.shape[-1])
+            out = out + residual
+        
+        # Apply tanh activation
+        return self.tanh(out)
 
 
 class WavLMDecoder(nn.Module):
@@ -286,28 +345,59 @@ class WavLMDecoder(nn.Module):
     ):
         super().__init__()
         kernel_size = 4 if causal else 7
+        self.use_residual = use_residual
+        self.d_out = d_out
+        self.channels = channels
 
-        # Add first conv layer
-        layers = [WNConv1d(input_channel, channels, kernel_size=kernel_size, causal=causal)]
+        # Create first conv layer separately
+        self.first_conv = WNConv1d(input_channel, channels, kernel_size=kernel_size, causal=causal)
 
         # Add upsampling + decoder blocks
+        layers = []
         input_dim = channels
         for stride, multiplier in zip(strides, multipliers):
             output_dim = input_dim // multiplier
             layers += [DecoderBlock(input_dim, output_dim, stride, causal=causal, dilate=dilate, use_rmsnorm=use_rmsnorm, use_residual=use_residual)]
             input_dim = output_dim
 
-        # Add final conv layers
-        layers += [
-            RMSNorm(input_dim) if use_rmsnorm else nn.Identity(),
-            Snake1d(input_dim),
-            WNConv1d(input_dim, d_out, kernel_size=kernel_size, causal=causal),
-        ]
-
-        self.model = nn.Sequential(*layers)
+        self.final_input_dim = input_dim
+        
+        # Add RMSNorm and Snake1d to layers only when not using residual
+        if not use_residual:
+            layers += [
+                RMSNorm(input_dim) if use_rmsnorm else nn.Identity(),
+                Snake1d(input_dim),
+            ]
+        
+        # Wrap layers into nn.Sequential
+        self.main_layers = nn.Sequential(*layers)
+        
+        # Always create the final convolution
+        self.final_conv = WNConv1d(input_dim, d_out, kernel_size=kernel_size, causal=causal)
 
     def forward(self, x):
-        return self.model(x)
+        # Apply first convolution
+        out = self.first_conv(x)
+        
+        if self.use_residual:
+            # Add residual connection for first conv
+            residual = match_channels(x, self.channels)
+            residual = match_time_dimension(residual, out.shape[-1])
+            out = out + residual
+        
+        # Process through main layers
+        features = self.main_layers(out)
+        
+        # Apply final conv
+        out = self.final_conv(features)
+        
+        if self.use_residual:
+            # Add residual connection for final conv
+            residual = match_channels(features, self.d_out)
+            residual = match_time_dimension(residual, out.shape[-1])
+            out = out + residual
+        
+        return out
 
 
 class DAC(BaseModel, CodecMixin):
