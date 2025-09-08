@@ -12,6 +12,8 @@ from sklearn.decomposition import PCA
 from scipy.fftpack import dct
 import wandb
 import os
+import tempfile
+import shutil
 
 
 def compute_mcd(mel_spec1, mel_spec2):
@@ -394,9 +396,10 @@ def save_evaluation_plots_to_wandb(model, signal, latents, step=0, prefix="eval"
         step: Current training step
         prefix: Prefix for wandb logging
     """
-    # Create temporary directory for plots
-    temp_dir = Path("temp_eval_plots")
-    temp_dir.mkdir(exist_ok=True)
+    # Create a unique temporary directory for plots to avoid race conditions
+    # when multiple training runs execute on the same machine
+    temp_dir_obj = tempfile.mkdtemp(prefix="temp_eval_plots_")
+    temp_dir = Path(temp_dir_obj)
     
     try:
         # 1. Latent visualization with PCA
@@ -436,13 +439,8 @@ def save_evaluation_plots_to_wandb(model, signal, latents, step=0, prefix="eval"
         wandb.log({f"{prefix}/locality": wandb.Image(str(locality_plot_path))}, step=step)
         
     finally:
-        # Clean up temporary files
-        for file in temp_dir.glob("*.png"):
-            try:
-                os.remove(file)
-            except:
-                pass
+        # Clean up temporary directory and all its contents
         try:
-            temp_dir.rmdir()
+            shutil.rmtree(temp_dir)
         except:
             pass
