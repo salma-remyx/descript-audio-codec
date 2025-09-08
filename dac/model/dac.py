@@ -557,8 +557,7 @@ class DAC(BaseModel, CodecMixin):
             
             # Apply progressive channel dropout if use_residual is enabled (DC-AE 1.5 style)
             if self.use_residual:
-                # Randomly select a channel cutoff for each sample in the batch
-                cutoff_channels = torch.randint(0, z.shape[1], (z.shape[0],), device=z.device)
+                cutoff_channels = z.shape[1] // (2 ** torch.randint(0, 4, (z.shape[0],), device=z.device))
                 
                 # Create a mask that zeros out channels after the cutoff
                 channel_mask = (torch.arange(z.shape[1], device=z.device).unsqueeze(0) <= cutoff_channels.unsqueeze(1)).unsqueeze(-1).float()
