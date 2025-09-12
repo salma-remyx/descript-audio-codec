@@ -569,6 +569,7 @@ class DAC(BaseModel, CodecMixin):
                 
                 # Apply the mask to zero out channels after the cutoff
                 z = z * channel_mask
+                z_clean = z_clean * channel_mask
         else:
             z = z_clean
             
