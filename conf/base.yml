@@ -3,7 +3,7 @@ DAC.sample_rate: 44100
 DAC.encoder_dim: 128
 DAC.encoder_strides: [4, 8, 8, 8]
 DAC.encoder_multipliers: [2, 2, 2, 2]
-DAC.latent_dim: 64
+DAC.latent_dim: 128
 DAC.decoder_dim: 2048
 DAC.decoder_strides: [8, 8, 8, 4]
 DAC.decoder_multipliers: [2, 2, 2, 2]
@@ -14,7 +14,7 @@ DAC.causal: true
 DAC.dilate: true
 DAC.use_rmsnorm: true
 DAC.use_residual: true  # DC-AE inspired parameter-free residual connections
-DAC.structured_latent: false  # Progressive channel dropout for latents
+DAC.structured_latent: true  # Progressive channel dropout for latents
 
 # Discriminator
 Discriminator.sample_rate: 44100
@@ -47,7 +47,7 @@ seed: 0
 lambdas:
   adv/gen_loss: 1.0
   adv/feat_loss: 2.0
-  latents/loss: 2.0
+  latents/loss: 1.0
   mel/loss: 15.0
   wavlm/mse_loss: 50.0
   wavlm/cosine_loss: 50.0
@@ -56,7 +56,7 @@ lambdas:
 ema_decay: 0.999
 
 # Linear warmup steps for latents/loss lambda
-latents_warmup_steps: 30000
+latents_warmup_steps: 10000
 
 VolumeNorm.db: [const, -16]
 
