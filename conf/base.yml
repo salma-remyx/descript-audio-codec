@@ -112,13 +112,6 @@ train/build_dataset.folders:
     - /data/dac/german_speech/
     - /data/dac/russian_speech/
     - /data/dac/spanish_speech/
-  music_hq:
-    - /data/dac/musdb18hq/train
-  music_uq:
-    - /data/dac/mtg-jamendo
-  general:
-    - /data/dac/audioset/audios/unbalanced_train_segments/
-    - /data/dac/audioset/audios/balanced_train_segments/
 
 val/build_dataset.folders:
   speech_hq:
