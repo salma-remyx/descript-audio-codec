@@ -14,7 +14,7 @@ DAC.causal: true
 DAC.dilate: true
 DAC.use_rmsnorm: true
 DAC.use_residual: true  # DC-AE inspired parameter-free residual connections
-DAC.structured_latent: true  # Progressive channel dropout for latents
+DAC.structured_latent: false  # Progressive channel dropout for latents
 
 # Discriminator
 Discriminator.sample_rate: 44100
@@ -47,7 +47,7 @@ seed: 0
 lambdas:
   adv/gen_loss: 1.0
   adv/feat_loss: 2.0
-  latents/loss: 1.0
+  latents/loss: 2.0
   mel/loss: 15.0
   wavlm/mse_loss: 50.0
   wavlm/cosine_loss: 50.0
