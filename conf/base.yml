@@ -32,7 +32,7 @@ Discriminator.bands:
 AdamW.betas: [0.8, 0.99]
 AdamW.lr: 0.0001
 ExponentialLR.gamma: 0.999996
-Accelerator.gradient_accumulation_steps: 1
+gradient_accumulation_steps: 1  # Set to 1 to disable (default), increase to accumulate
 
 bfloat: false
 val_batch_size: 100

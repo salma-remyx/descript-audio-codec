@@ -276,6 +276,10 @@ class State:
 
     # Mixed precision bfloat16
     bfloat: bool = False
+    
+    # Gradient accumulation
+    gradient_accumulation_steps: int = 1
+    accumulation_step: int = 0
 
 
 @argbind.bind(without_prefix=True)
@@ -367,6 +371,8 @@ def load(
     latents_warmup_steps = int(args.get("latents_warmup_steps", 10000))
     # bfloat16 flag picked from config (defaults to False)
     bfloat_flag = bool(args.get("bfloat", False))
+    # Gradient accumulation steps (defaults to 1 = no accumulation)
+    gradient_accumulation_steps = int(args.get("gradient_accumulation_steps", 1))
 
     return State(
         generator=generator,
@@ -390,6 +396,8 @@ def load(
         ema=ema,
         latents_warmup_steps=latents_warmup_steps,
         bfloat=bfloat_flag,
+        gradient_accumulation_steps=gradient_accumulation_steps,
+        accumulation_step=0,
     )
 
 
@@ -455,32 +463,41 @@ def train_loop(state, batch, accel, lambdas):
     # Cast reconstructed audio to float32 for downstream losses that rely on external libs
     recons.audio_data = recons.audio_data.float()
 
+    # Scale discriminator loss for gradient accumulation
     with (torch.autocast(device_type=device_type, dtype=torch.bfloat16) if state.bfloat else nullcontext()):
-        output["adv/disc_loss"] = state.gan_loss.discriminator_loss(recons, signal)
+        output["adv/disc_loss"] = state.gan_loss.discriminator_loss(recons, signal) / state.gradient_accumulation_steps
 
-    state.optimizer_d.zero_grad()
+    # Only zero gradients at the start of accumulation cycle
+    if state.accumulation_step == 0:
+        state.optimizer_d.zero_grad()
+    
     accel.backward(output["adv/disc_loss"])
-    accel.scaler.unscale_(state.optimizer_d)
-    output["other/grad_norm_d"] = torch.nn.utils.clip_grad_norm_(
-        state.discriminator.parameters(), 10.0
-    )
-    accel.step(state.optimizer_d)
-    state.scheduler_d.step()
+    
+    # Only step optimizer after accumulating gradients
+    if (state.accumulation_step + 1) % state.gradient_accumulation_steps == 0:
+        accel.scaler.unscale_(state.optimizer_d)
+        output["other/grad_norm_d"] = torch.nn.utils.clip_grad_norm_(
+            state.discriminator.parameters(), 10.0
+        )
+        accel.step(state.optimizer_d)
+        state.scheduler_d.step()
 
+    # Scale generator losses for gradient accumulation
     with (torch.autocast(device_type=device_type, dtype=torch.bfloat16) if state.bfloat else nullcontext()):
-        output["latents/loss"] = state.l2_latents(out["z_clean"])
-        (
-            output["adv/gen_loss"],
-            output["adv/feat_loss"],
-        ) = state.gan_loss.generator_loss(recons, signal)
+        output["latents/loss"] = state.l2_latents(out["z_clean"]) / state.gradient_accumulation_steps
+        gen_loss, feat_loss = state.gan_loss.generator_loss(recons, signal)
+        output["adv/gen_loss"] = gen_loss / state.gradient_accumulation_steps
+        output["adv/feat_loss"] = feat_loss / state.gradient_accumulation_steps
 
-    # Compute spectral and waveform losses in float32-safe path (no autocast)
-    output["stft/loss"] = state.stft_loss(recons, signal)
-    output["mel/loss"] = state.mel_loss(recons, signal)
-    output["waveform/loss"] = state.waveform_loss(recons, signal)
+    # Compute spectral and waveform losses in float32-safe path (no autocast) - also scale
+    output["stft/loss"] = state.stft_loss(recons, signal) / state.gradient_accumulation_steps
+    output["mel/loss"] = state.mel_loss(recons, signal) / state.gradient_accumulation_steps
+    output["waveform/loss"] = state.waveform_loss(recons, signal) / state.gradient_accumulation_steps
 
-    # Compute WavLM losses in float32-safe path (no autocast)
-    output["wavlm/cosine_loss"], output["wavlm/mse_loss"] = state.wavlm_loss(out["wavlm"], signal)
+    # Compute WavLM losses in float32-safe path (no autocast) - also scale
+    wavlm_cosine, wavlm_mse = state.wavlm_loss(out["wavlm"], signal)
+    output["wavlm/cosine_loss"] = wavlm_cosine / state.gradient_accumulation_steps
+    output["wavlm/mse_loss"] = wavlm_mse / state.gradient_accumulation_steps
 
     # Linear warmup for latents/loss
     curr_lambdas = dict(lambdas)
@@ -490,21 +507,37 @@ def train_loop(state, batch, accel, lambdas):
         output["other/latents_lambda"] = torch.tensor(curr_lambdas["latents/loss"], device=signal.audio_data.device)
     output["loss"] = sum([v * output[k] for k, v in curr_lambdas.items() if k in output])
 
-    state.optimizer_g.zero_grad()
+    # Only zero gradients at the start of accumulation cycle
+    if state.accumulation_step == 0:
+        state.optimizer_g.zero_grad()
+    
     accel.backward(output["loss"])
-    accel.scaler.unscale_(state.optimizer_g)
-    output["other/grad_norm"] = torch.nn.utils.clip_grad_norm_(
-        state.generator.parameters(), 1e3
-    )
-    accel.step(state.optimizer_g)
-    state.scheduler_g.step()
-    accel.update()
+    
+    # Only step optimizer after accumulating gradients
+    if (state.accumulation_step + 1) % state.gradient_accumulation_steps == 0:
+        accel.scaler.unscale_(state.optimizer_g)
+        output["other/grad_norm"] = torch.nn.utils.clip_grad_norm_(
+            state.generator.parameters(), 1e3
+        )
+        accel.step(state.optimizer_g)
+        state.scheduler_g.step()
+        accel.update()
 
-    if state.ema is not None:
-        state.ema.update(accel.unwrap(state.generator))
+        if state.ema is not None:
+            state.ema.update(accel.unwrap(state.generator))
 
     output["other/learning_rate"] = state.optimizer_g.param_groups[0]["lr"]
-    output["other/batch_size"] = signal.batch_size * accel.world_size
+    # Report effective batch size including gradient accumulation
+    output["other/batch_size"] = signal.batch_size * accel.world_size * state.gradient_accumulation_steps
+    
+    # Update accumulation step counter
+    state.accumulation_step = (state.accumulation_step + 1) % state.gradient_accumulation_steps
+    
+    # Scale back the losses for logging (to show actual loss values, not scaled)
+    for key in output:
+        if key not in ["other/grad_norm", "other/grad_norm_d", "other/learning_rate", 
+                       "other/batch_size", "other/latents_lambda"]:
+            output[key] = output[key] * state.gradient_accumulation_steps
 
     return {k: v for k, v in sorted(output.items())}
 
@@ -706,6 +739,12 @@ def train(
     )
 
     state = load(args, accel, tracker, save_path)
+    
+    # Log gradient accumulation status
+    if state.gradient_accumulation_steps > 1:
+        tracker.print(f"Using gradient accumulation with {state.gradient_accumulation_steps} steps")
+        tracker.print(f"Effective batch size: {batch_size * state.gradient_accumulation_steps * accel.world_size}")
+    
     train_dataloader = accel.prepare_dataloader(
         state.train_data,
         start_idx=state.tracker.step * batch_size,
@@ -753,6 +792,25 @@ def train(
                 tracker.done("val", f"Iteration {tracker.step}")
 
             if last_iter:
+                # If we have accumulated gradients that haven't been applied yet, do a final step
+                if state.accumulation_step != 0:
+                    tracker.print(f"Applying final accumulated gradients (step {state.accumulation_step}/{state.gradient_accumulation_steps})")
+                    
+                    # Force optimizer steps for any remaining accumulated gradients
+                    accel.scaler.unscale_(state.optimizer_d)
+                    torch.nn.utils.clip_grad_norm_(state.discriminator.parameters(), 10.0)
+                    accel.step(state.optimizer_d)
+                    state.scheduler_d.step()
+                    
+                    accel.scaler.unscale_(state.optimizer_g)
+                    torch.nn.utils.clip_grad_norm_(state.generator.parameters(), 1e3)
+                    accel.step(state.optimizer_g)
+                    state.scheduler_g.step()
+                    accel.update()
+                    
+                    if state.ema is not None:
+                        state.ema.update(accel.unwrap(state.generator))
+                
                 tracker.finish()
                 break
 
