@@ -215,11 +215,12 @@ class Encoder(nn.Module):
             # Compute local power for each latent frame
             B, _, T_latent = out.shape
 
+            total_stride = int(np.prod(self.strides))
             # Concatenate power channel with learned features
             out = torch.cat(
                 [
-                    2 * torch.sqrt(torch.mean(
-                        x.view(B, 1, T_latent, np.prod(self.strides)) ** 2, dim=-1)) - 1, 
+                    2 * torch.sqrt(torch.mean(x[..., :T_latent * total_stride].view(
+                        B, 1, T_latent, total_stride) ** 2, dim=-1)) - 1,
                     out
                 ],
                 dim=1
