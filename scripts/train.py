@@ -45,12 +45,15 @@ class WandbTracker(Tracker):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.wandb_initialized = False
+        self.grad_accumulation_steps = 1
         
     def init_wandb(self, project, name, config):
         """Initialize wandb if not already initialized."""
         if not self.wandb_initialized and self.rank == 0:
             wandb.init(project=project, name=name, config=config)
             self.wandb_initialized = True
+        # Configure accumulation steps from config for effective-step logging
+        self.grad_accumulation_steps = config["gradient_accumulation_steps"]
             
     def log(self, prefix, reduction="mean", history=True):
         """Override log to also log to wandb."""
@@ -59,7 +62,9 @@ class WandbTracker(Tracker):
         def wandb_log_fn(fn):
             def wrapper(*args, **kwargs):
                 output = fn(*args, **kwargs)
-                if self.rank == 0 and self.wandb_initialized:
+                # Only log on effective optimizer steps when accumulating
+                is_boundary = (self.grad_accumulation_steps == 1) or (((self.step + 1) % self.grad_accumulation_steps) == 0)
+                if self.rank == 0 and self.wandb_initialized and is_boundary:
                     # Convert tensor values to scalars
                     wandb_output = {}
                     for k, v in output.items():
@@ -67,7 +72,7 @@ class WandbTracker(Tracker):
                             wandb_output[k] = v.item()
                         else:
                             wandb_output[k] = v
-                    wandb.log(wandb_output, step=self.step)
+                    wandb.log(wandb_output, step=self.step // self.grad_accumulation_steps)
                 return output
             return wrapper
         
@@ -502,7 +507,8 @@ def train_loop(state, batch, accel, lambdas):
     # Linear warmup for latents/loss
     curr_lambdas = dict(lambdas)
     if "latents/loss" in curr_lambdas and state.latents_warmup_steps > 0:
-        warmup_ratio = min(1.0, max(0.0, state.tracker.step / state.latents_warmup_steps))
+        effective_step = state.tracker.step // state.gradient_accumulation_step
+        warmup_ratio = min(1.0, max(0.0, effective_step / state.latents_warmup_steps))
         curr_lambdas["latents/loss"] = curr_lambdas["latents/loss"] * warmup_ratio
         output["other/latents_lambda"] = torch.tensor(curr_lambdas["latents/loss"], device=signal.audio_data.device)
     output["loss"] = sum([v * output[k] for k, v in curr_lambdas.items() if k in output])
@@ -550,8 +556,9 @@ def checkpoint(state, save_iters, save_path):
     if state.tracker.is_best("val", "mel/loss"):
         state.tracker.print(f"Best generator so far")
         tags.append("best")
-    if state.tracker.step in save_iters:
-        tags.append(f"{state.tracker.step // 1000}k")
+    eff_step = state.tracker.step // state.gradient_accumulation_steps
+    if eff_step in save_iters:
+        tags.append(f"{eff_step // 1000}k")
 
     for tag in tags:
         generator_extra = {
@@ -584,6 +591,7 @@ def checkpoint(state, save_iters, save_path):
 def save_samples(state, val_idx):
     state.tracker.print("Saving audio samples to wandb")
     state.generator.eval()
+    eff_step = state.tracker.step // state.gradient_accumulation_steps
 
     samples = [state.val_data[idx] for idx in val_idx]
     batch = state.val_data.collate(samples)
@@ -654,7 +662,7 @@ def save_samples(state, val_idx):
             metrics_to_log["metrics/wer"] = sum(wer_scores) / len(wer_scores)
         
         if metrics_to_log:
-            wandb.log(metrics_to_log, step=state.tracker.step)
+            wandb.log(metrics_to_log, step=eff_step)
 
     # Generate evaluation plots for each sample
     for i in range(signal.batch_size):
@@ -675,7 +683,7 @@ def save_samples(state, val_idx):
         
         # Also compute and log individual condition numbers
         cond_number, _, _, _ = compute_condition_number(latents_i)
-        wandb.log({f"eval/sample_{i}/condition_number": cond_number}, step=state.tracker.step)
+        wandb.log({f"eval/sample_{i}/condition_number": cond_number}, step=eff_step)
 
     audio_dict = {"recons": recons}
     if state.tracker.step == 0:
@@ -686,7 +694,7 @@ def save_samples(state, val_idx):
             # Save audio to wandb
             audio_path = f"temp_{k}_sample_{nb}.wav"
             v[nb].cpu().write(audio_path)
-            wandb.log({f"audio/{k}/sample_{nb}": wandb.Audio(audio_path)}, step=state.tracker.step)
+            wandb.log({f"audio/{k}/sample_{nb}": wandb.Audio(audio_path)}, step=eff_step)
             os.remove(audio_path)  # Clean up temporary file
 
 
@@ -779,19 +787,20 @@ def train(
         for tracker.step, batch in enumerate(train_dataloader, start=tracker.step):
             train_loop(state, batch, accel, lambdas)
 
-            last_iter = (
-                tracker.step == num_iters - 1 if num_iters is not None else False
-            )
-            if tracker.step % sample_freq == 0 or last_iter:
+            boundary = (state.gradient_accumulation_steps == 1) or (state.accumulation_step == 0)
+            eff_step = tracker.step // state.gradient_accumulation_steps
+            last_eff_iter = (eff_step == num_iters - 1) if num_iters is not None else False
+
+            if boundary and (eff_step % sample_freq == 0 or last_eff_iter):
                 save_samples(state, val_idx)
 
-            if tracker.step % valid_freq == 0 or last_iter:
+            if boundary and (eff_step % valid_freq == 0 or last_eff_iter):
                 validate(state, val_dataloader, accel)
                 checkpoint(state, save_iters, save_path)
                 # Reset validation progress bar, print summary since last validation.
-                tracker.done("val", f"Iteration {tracker.step}")
+                tracker.done("val", f"Iteration {eff_step}")
 
-            if last_iter:
+            if last_eff_iter and boundary:
                 # If we have accumulated gradients that haven't been applied yet, do a final step
                 if state.accumulation_step != 0:
                     tracker.print(f"Applying final accumulated gradients (step {state.accumulation_step}/{state.gradient_accumulation_steps})")
