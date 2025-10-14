@@ -774,7 +774,11 @@ def train(
     # and only run when specific conditions are met.
     global train_loop, val_loop, validate, save_samples, checkpoint
     train_loop = tracker.log("train", "value", history=False)(
-        tracker.track("train", num_iters, completed=state.tracker.step)(train_loop)
+        tracker.track(
+            "train",
+            num_iters * state.gradient_accumulation_steps,
+            completed=state.tracker.step,
+        )(train_loop)
     )
     val_loop = tracker.track("val", len(val_dataloader))(val_loop)
     validate = tracker.log("val", "mean")(validate)
