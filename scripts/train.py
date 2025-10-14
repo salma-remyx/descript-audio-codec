@@ -507,7 +507,7 @@ def train_loop(state, batch, accel, lambdas):
     # Linear warmup for latents/loss
     curr_lambdas = dict(lambdas)
     if "latents/loss" in curr_lambdas and state.latents_warmup_steps > 0:
-        effective_step = state.tracker.step // state.gradient_accumulation_step
+        effective_step = state.tracker.step // state.gradient_accumulation_steps
         warmup_ratio = min(1.0, max(0.0, effective_step / state.latents_warmup_steps))
         curr_lambdas["latents/loss"] = curr_lambdas["latents/loss"] * warmup_ratio
         output["other/latents_lambda"] = torch.tensor(curr_lambdas["latents/loss"], device=signal.audio_data.device)
