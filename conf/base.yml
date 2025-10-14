@@ -15,6 +15,7 @@ DAC.dilate: true
 DAC.use_rmsnorm: true
 DAC.use_residual: true  # DC-AE inspired parameter-free residual connections
 DAC.structured_latent: false  # Progressive channel dropout for latents
+DAC.power_channel: false  # Use first latent channel for explicit power encoding
 
 # Discriminator
 Discriminator.sample_rate: 44100

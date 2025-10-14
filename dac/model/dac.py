@@ -158,12 +158,15 @@ class Encoder(nn.Module):
         dilate: bool = True,
         use_rmsnorm: bool = True,
         use_residual: bool = False,
+        power_channel: bool = False,
     ):
         super().__init__()
         kernel_size = 4 if causal else 7
         self.use_residual = use_residual
+        self.power_channel = power_channel
         self.d_latent = d_latent
         self.d_model = d_model
+        self.strides = strides
         
         # Create first convolution separately
         self.first_conv = WNConv1d(1, d_model, kernel_size=kernel_size, causal=causal)
@@ -187,8 +190,9 @@ class Encoder(nn.Module):
         self.block = nn.Sequential(*self.block)
         self.enc_dim = current_dim
         
-        # Always create the final convolution
-        self.final_conv = WNConv1d(current_dim, d_latent, kernel_size=kernel_size, causal=causal)
+        # Create final convolution - output d_latent-1 channels if power_channel is enabled
+        final_latent_dim = d_latent - 1 if power_channel else d_latent
+        self.final_conv = WNConv1d(current_dim, final_latent_dim, kernel_size=kernel_size, causal=causal)
 
     def forward(self, x):
         # Apply first convolution
@@ -205,6 +209,21 @@ class Encoder(nn.Module):
         
         # Apply final conv
         out = self.final_conv(features)
+        
+        # Add power channel if enabled
+        if self.power_channel:
+            # Compute local power for each latent frame
+            B, _, T_latent = out.shape
+
+            # Concatenate power channel with learned features
+            out = torch.cat(
+                [
+                    2 * torch.sqrt(torch.mean(
+                        x.view(B, 1, T_latent, np.prod(self.strides)) ** 2, dim=-1)) - 1, 
+                    out
+                ],
+                dim=1
+            )
         
         if self.use_residual:
             # Add residual connection for final conv
@@ -419,6 +438,7 @@ class DAC(BaseModel, CodecMixin):
         use_rmsnorm: bool = True,
         use_residual: bool = False,  # DC-AE inspired residual connections
         structured_latent: bool = False,  # Progressive channel dropout for latents
+        power_channel: bool = False,  # Use first latent channel for explicit power encoding
     ):
         super().__init__()
 
@@ -439,7 +459,7 @@ class DAC(BaseModel, CodecMixin):
         self.latent_dim = latent_dim
 
         self.hop_length = np.prod(encoder_strides)
-        self.encoder = Encoder(encoder_dim, encoder_strides, encoder_multipliers, latent_dim, causal=causal, dilate=dilate, use_rmsnorm=use_rmsnorm, use_residual=use_residual)
+        self.encoder = Encoder(encoder_dim, encoder_strides, encoder_multipliers, latent_dim, causal=causal, dilate=dilate, use_rmsnorm=use_rmsnorm, use_residual=use_residual, power_channel=power_channel)
 
         self.decoder = Decoder(
             latent_dim,
