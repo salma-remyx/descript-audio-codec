@@ -677,7 +677,7 @@ def save_samples(state, val_idx):
             accel.unwrap(state.generator), 
             signal_i, 
             latents_i, 
-            step=state.tracker.step,
+            step=eff_step,
             prefix=f"eval/sample_{i}"
         )
         
