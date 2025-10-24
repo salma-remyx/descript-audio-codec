@@ -455,72 +455,96 @@ def train_loop(state, batch, accel, lambdas):
             batch["signal"].clone(), **batch["transform_args"]
         )
 
-    # Calculate if this is an update step for gradient accumulation
+    # When to step (end of accumulation window)
     is_update_step = ((state.tracker.step + 1) % state.gradient_accumulation_steps == 0)
-    
+
     device_type = accel.device.type if hasattr(accel.device, "type") else ("cuda" if torch.cuda.is_available() else "cpu")
-    with (torch.autocast(device_type=device_type, dtype=torch.bfloat16) if state.bfloat else nullcontext()):
+    autocast_ctx = torch.autocast(device_type=device_type, dtype=torch.bfloat16) if state.bfloat else nullcontext()
+
+    # ----------------
+    # Forward once
+    # ----------------
+    with autocast_ctx:
         out = state.generator(signal.audio_data, signal.sample_rate, training=True)
         recons = AudioSignal(out["audio"], signal.sample_rate)
-    # Cast reconstructed audio to float32 for downstream losses that rely on external libs
+    # downstream losses expect float32
     recons.audio_data = recons.audio_data.float()
 
-    # Discriminator loss
-    with (torch.autocast(device_type=device_type, dtype=torch.bfloat16) if state.bfloat else nullcontext()):
-        output["adv/disc_loss"] = state.gan_loss.discriminator_loss(recons, signal)
+    # ----------------
+    # D: accumulate discriminator grads ONLY
+    # ----------------
+    # (3) Ensure D loss does not backprop to G
+    recons_for_d = AudioSignal(recons.audio_data.detach(), recons.sample_rate)
+    with autocast_ctx:
+        output["adv/disc_loss"] = state.gan_loss.discriminator_loss(recons_for_d, signal)
 
-    
     accel.backward(output["adv/disc_loss"] / state.gradient_accumulation_steps)
 
-    if is_update_step:
-        accel.scaler.unscale_(state.optimizer_d)
-        output["other/grad_norm_d"] = torch.nn.utils.clip_grad_norm_(
-            state.discriminator.parameters(), 10.0
-        )
-        accel.step(state.optimizer_d)
-        state.scheduler_d.step()
-        state.optimizer_d.zero_grad()
+    # ----------------
+    # G: freeze D, accumulate generator grads ONLY
+    # ----------------
+    # (1) Freeze D so G loss doesn't write grads into D
+    for p in state.discriminator.parameters():
+        p.requires_grad_(False)
 
-    # Generator losses
-    with (torch.autocast(device_type=device_type, dtype=torch.bfloat16) if state.bfloat else nullcontext()):
+    with autocast_ctx:
         output["latents/loss"] = state.l2_latents(out["z_clean"])
         gen_loss, feat_loss = state.gan_loss.generator_loss(recons, signal)
         output["adv/gen_loss"] = gen_loss
         output["adv/feat_loss"] = feat_loss
 
-    # Compute spectral and waveform losses in float32-safe path (no autocast)
+    # float32-safe losses
     output["stft/loss"] = state.stft_loss(recons, signal)
     output["mel/loss"] = state.mel_loss(recons, signal)
     output["waveform/loss"] = state.waveform_loss(recons, signal)
 
-    # Compute WavLM losses in float32-safe path (no autocast)
     wavlm_cosine, wavlm_mse = state.wavlm_loss(out["wavlm"], signal)
     output["wavlm/cosine_loss"] = wavlm_cosine
     output["wavlm/mse_loss"] = wavlm_mse
 
-    # Linear warmup for latents/loss
+    # latents warmup computed on effective steps (you already did this right)
     curr_lambdas = dict(lambdas)
     if "latents/loss" in curr_lambdas and state.latents_warmup_steps > 0:
         warmup_ratio = min(1.0, max(0.0, state.tracker.step / (state.gradient_accumulation_steps * state.latents_warmup_steps)))
-        curr_lambdas["latents/loss"] = curr_lambdas["latents/loss"] * warmup_ratio
+        curr_lambdas["latents/loss"] *= warmup_ratio
         output["other/latents_lambda"] = torch.tensor(curr_lambdas["latents/loss"], device=signal.audio_data.device)
+
     output["loss"] = sum([v * output[k] for k, v in curr_lambdas.items() if k in output])
 
     accel.backward(output["loss"] / state.gradient_accumulation_steps)
 
+    # Unfreeze D for the next iteration
+    for p in state.discriminator.parameters():
+        p.requires_grad_(True)
+
+    # ----------------
+    # Step both optimizers together at the end
+    # ----------------
     if is_update_step:
+        # Guard in case AMP scaler is not present
+        accel.scaler.unscale_(state.optimizer_d)
+        output["other/grad_norm_d"] = torch.nn.utils.clip_grad_norm_(
+            state.discriminator.parameters(), 10.0
+        )
+
         accel.scaler.unscale_(state.optimizer_g)
         output["other/grad_norm"] = torch.nn.utils.clip_grad_norm_(
             state.generator.parameters(), 1e3
         )
-        accel.step(state.optimizer_g)
-        state.scheduler_g.step()
-        accel.update()
-        state.optimizer_g.zero_grad()
 
-    # Only update EMA on gradient update steps
-    if is_update_step and state.ema is not None:
-        state.ema.update(accel.unwrap(state.generator))
+        # (2) Step both optimizers once per accumulation window
+        accel.step(state.optimizer_d)
+        accel.step(state.optimizer_g)
+        state.scheduler_d.step()
+        state.scheduler_g.step()
+
+        state.optimizer_d.zero_grad(set_to_none=True)
+        state.optimizer_g.zero_grad(set_to_none=True)
+
+        accel.update()
+
+        if state.ema is not None:
+            state.ema.update(accel.unwrap(state.generator))
 
     output["other/learning_rate"] = state.optimizer_g.param_groups[0]["lr"]
     output["other/batch_size"] = signal.batch_size * accel.world_size
