@@ -21,6 +21,7 @@ from audiotools import AudioSignal
 from audiotools.data import transforms
 
 from dac.model import DAC
+from dac.utils.transforms import PowerNorm
 from metrics import SIM, PESQ, WER
 from tqdm.auto import tqdm
 
@@ -78,9 +79,8 @@ def evaluate_dataset(
     pesq_metric = PESQ()
     wer_metric = WER(device=device)
 
-    # Match training postprocess: VolumeNorm -> RescaleAudio (apply explicitly)
-    _vol_norm = transforms.VolumeNorm(db=("const", -16.0))
-    _rescale = transforms.RescaleAudio(val=1.0)
+    # Match training postprocess: PowerNorm (apply explicitly)
+    _power_norm = PowerNorm(db=-16.0)
 
     sim_scores: List[float] = []
     pesq_scores: List[float] = []
@@ -94,11 +94,8 @@ def evaluate_dataset(
             signal.resample(model.sample_rate)
         signal.to(device)
 
-        # Apply same postprocess used in training via _instantiate/_transform
-        vn_params = _vol_norm._instantiate(None)
-        signal = _vol_norm._transform(signal, **vn_params)
-        rs_params = _rescale._instantiate(None)
-        signal = _rescale._transform(signal, **rs_params)
+        # Apply same postprocess used in training
+        signal = _power_norm._transform(signal)
 
         # Encode/decode without autocast
         z = model.encode(signal.audio_data)

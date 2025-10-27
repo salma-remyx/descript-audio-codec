@@ -5,6 +5,7 @@ from pathlib import Path
 from audiotools import AudioSignal
 from audiotools.data import transforms
 from dac.model import DAC
+from dac.utils.transforms import PowerNorm
 from tqdm import tqdm
 
 from metrics.eval_utils import (
@@ -66,8 +67,7 @@ def analyze_latent_perturbations(
     model.eval()
     
     # Prepare transforms (match training postprocess)
-    _vol_norm = transforms.VolumeNorm(db=("const", -16.0))
-    _rescale = transforms.RescaleAudio(val=1.0)
+    _power_norm = PowerNorm(db=-16.0)
 
     # Collect all wav files
     wav_files = sorted(Path(dataset_path).rglob("*.wav")) if str(dataset_path) != "" else []
@@ -93,10 +93,7 @@ def analyze_latent_perturbations(
         signal.to(device)
         
         # Apply training postprocess
-        vn_params = _vol_norm._instantiate(None)
-        signal = _vol_norm._transform(signal, **vn_params)
-        rs_params = _rescale._instantiate(None)
-        signal = _rescale._transform(signal, **rs_params)
+        signal = _power_norm._transform(signal)
         # Ensure model padding behavior still applies before encoding
         signal.audio_data = model.preprocess(signal.audio_data, signal.sample_rate)
         

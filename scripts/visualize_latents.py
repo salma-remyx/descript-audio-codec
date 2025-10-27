@@ -5,6 +5,7 @@ from pathlib import Path
 from audiotools import AudioSignal
 from audiotools.data import transforms
 from dac.model import DAC
+from dac.utils.transforms import PowerNorm
 from metrics.eval_utils import visualize_latents_with_pca
 
 @argbind.bind(without_prefix=True)
@@ -30,13 +31,9 @@ def visualize(
     signal = AudioSignal(audio_file)
     signal.to(model.device)
     
-    # Apply training postprocess via _instantiate/_transform: VolumeNorm -> RescaleAudio
-    _vol_norm = transforms.VolumeNorm(db=("const", -16.0))
-    _rescale = transforms.RescaleAudio(val=1.0)
-    vn_params = _vol_norm._instantiate(None)
-    signal = _vol_norm._transform(signal, **vn_params)
-    rs_params = _rescale._instantiate(None)
-    signal = _rescale._transform(signal, **rs_params)
+    # Apply training postprocess via PowerNorm
+    _power_norm = PowerNorm(db=-16.0)
+    signal = _power_norm._transform(signal)
     
     # Get DAC latents
     with torch.no_grad():

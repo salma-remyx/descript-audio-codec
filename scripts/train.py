@@ -110,6 +110,13 @@ filter_fn = lambda fn: hasattr(fn, "transform") and fn.__qualname__ not in [
 ]
 tfm = argbind.bind_module(transforms, "train", "val", filter_fn=filter_fn)
 
+# Import and add our custom PowerNorm transform
+from dac.utils.transforms import PowerNorm
+# Add PowerNorm to the transforms module so it can be used like other transforms
+transforms.PowerNorm = PowerNorm
+# Now bind it with the same pattern as other transforms
+tfm.PowerNorm = argbind.bind(PowerNorm)
+
 # Loss
 filter_fn = lambda fn: hasattr(fn, "forward") and "Loss" in fn.__name__
 losses = argbind.bind_module(dac.nn.loss, filter_fn=filter_fn)

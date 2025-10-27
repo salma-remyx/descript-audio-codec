@@ -4,6 +4,7 @@ import argbind
 from audiotools import ml
 
 import dac
+from .transforms import PowerNorm, power_norm
 
 DAC = dac.model.DAC
 Accelerator = ml.Accelerator

@@ -36,7 +36,7 @@ ExponentialLR.gamma: 0.999996
 gradient_accumulation_steps: 1  # Set to 1 to disable (default), increase to accumulate
 
 bfloat: false
-val_batch_size: 100
+val_batch_size: 128
 device: cuda
 num_iters: 250000
 save_iters: [10000, 50000, 100000, 200000]
@@ -59,7 +59,7 @@ ema_decay: 0.999
 # Linear warmup steps for latents/loss lambda
 latents_warmup_steps: 10000
 
-VolumeNorm.db: [const, -16]
+PowerNorm.db: [const, -16]
 
 # Transforms
 build_transform.preprocess:
@@ -68,8 +68,7 @@ build_transform.augment_prob: 0.0
 build_transform.augment:
   - Identity
 build_transform.postprocess:
-  - VolumeNorm
-  - RescaleAudio
+  - PowerNorm
   - ShiftPhase
 
 # Loss setup
@@ -85,7 +84,7 @@ WavLMLoss.vad_frame_samples: 0
 
 # Data
 batch_size: 128
-train/AudioDataset.duration: 0.38
+train/AudioDataset.duration: 1.5
 train/AudioDataset.n_examples: 10000000
 
 val/AudioDataset.duration: 5.0
