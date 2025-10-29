@@ -194,7 +194,17 @@ class Encoder(nn.Module):
         final_latent_dim = d_latent - 1 if power_channel else d_latent
         self.final_conv = WNConv1d(current_dim, final_latent_dim, kernel_size=kernel_size, causal=causal)
 
-    def forward(self, x):
+    def forward(self, x, training=False):
+        # Apply random gain during training if power_channel is enabled
+        if self.power_channel and training:
+            # Sample random gain from -6dB to 6dB
+            gain = 10 ** ((torch.rand(x.shape[0], 1, 1, device=x.device) * 12 - 6) / 20)
+            
+            # Apply inverse gain to audio before encoding
+            x /= gain
+        else:
+            gain = 1
+        
         # Apply first convolution
         out = self.first_conv(x)
         
@@ -216,10 +226,11 @@ class Encoder(nn.Module):
             B, _, T_latent = out.shape
 
             total_stride = int(np.prod(self.strides))
+            
             # Concatenate power channel with learned features
             out = torch.cat(
                 [
-                    2 * torch.sqrt(torch.mean(x[..., :T_latent * total_stride].view(
+                    2 * gain * torch.sqrt(torch.mean(x[..., :T_latent * total_stride].view(
                         B, 1, T_latent, total_stride) ** 2, dim=-1)) - 1,
                     out
                 ],
@@ -501,6 +512,7 @@ class DAC(BaseModel, CodecMixin):
     def encode(
         self,
         audio_data: torch.Tensor,
+        training: bool = False,
     ):
         """Encode given audio data
 
@@ -508,13 +520,16 @@ class DAC(BaseModel, CodecMixin):
         ----------
         audio_data : Tensor[B x 1 x T]
             Audio data to encode
+        training : bool, optional
+            Whether in training mode, by default False
+            If True and power_channel is enabled, applies random gain augmentation
 
         Returns
         -------
         Tensor[B x D x T]
             Encoded latent representation
         """
-        return self.encoder(audio_data)
+        return self.encoder(audio_data, training=training)
 
     def decode(self, z: torch.Tensor):
         """Decode given latent codes and return audio data
@@ -572,7 +587,7 @@ class DAC(BaseModel, CodecMixin):
         """
         length = audio_data.shape[-1]
         audio_data = self.preprocess(audio_data, sample_rate)
-        z_clean = self.encode(audio_data)
+        z_clean = self.encode(audio_data, training=training)
         
         if training:
             # Add Gaussian noise with random std between 0 and latent_noise_max
