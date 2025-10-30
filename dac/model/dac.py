@@ -220,6 +220,12 @@ class Encoder(nn.Module):
         # Apply final conv
         out = self.final_conv(features)
         
+        if self.use_residual:
+            # Add residual connection for final conv
+            residual = match_channels(features, self.d_latent - 1 if self.power_channel else self.d_latent)
+            residual = match_time_dimension(residual, out.shape[-1])
+            out = out + residual
+
         # Add power channel if enabled
         if self.power_channel:
             # Compute local power for each latent frame
@@ -236,12 +242,6 @@ class Encoder(nn.Module):
                 ],
                 dim=1
             )
-        
-        if self.use_residual:
-            # Add residual connection for final conv
-            residual = match_channels(features, self.d_latent)
-            residual = match_time_dimension(residual, out.shape[-1])
-            out = out + residual
         
         return out
 
