@@ -15,7 +15,7 @@ DAC.dilate: true
 DAC.use_rmsnorm: true
 DAC.use_residual: true  # DC-AE inspired parameter-free residual connections
 DAC.structured_latent: false  # Progressive channel dropout for latents
-DAC.power_channel: false  # Use first latent channel for explicit power encoding
+DAC.power_channel: false  # Use contrastive learning to encourage first channel to encode power
 
 # Discriminator
 Discriminator.sample_rate: 44100
@@ -52,6 +52,7 @@ lambdas:
   mel/loss: 15.0
   wavlm/mse_loss: 50.0
   wavlm/cosine_loss: 50.0
+  power_contrastive/loss: 1.0  # Weight for power-invariant contrastive loss
 
 # EMA decay (set to 0 to disable EMA)
 ema_decay: 0.999

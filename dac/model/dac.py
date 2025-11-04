@@ -158,12 +158,10 @@ class Encoder(nn.Module):
         dilate: bool = True,
         use_rmsnorm: bool = True,
         use_residual: bool = False,
-        power_channel: bool = False,
     ):
         super().__init__()
         kernel_size = 4 if causal else 7
         self.use_residual = use_residual
-        self.power_channel = power_channel
         self.d_latent = d_latent
         self.d_model = d_model
         self.strides = strides
@@ -190,21 +188,10 @@ class Encoder(nn.Module):
         self.block = nn.Sequential(*self.block)
         self.enc_dim = current_dim
         
-        # Create final convolution - output d_latent-1 channels if power_channel is enabled
-        final_latent_dim = d_latent - 1 if power_channel else d_latent
-        self.final_conv = WNConv1d(current_dim, final_latent_dim, kernel_size=kernel_size, causal=causal)
+        # Create final convolution - always output d_latent channels
+        self.final_conv = WNConv1d(current_dim, d_latent, kernel_size=kernel_size, causal=causal)
 
-    def forward(self, x, training=False):
-        # Apply random gain during training if power_channel is enabled
-        if self.power_channel and training:
-            # Sample random gain from -6dB to 6dB
-            gain = 10 ** ((torch.rand(x.shape[0], 1, 1, device=x.device) * 12 - 6) / 20)
-            
-            # Apply inverse gain to audio before encoding
-            x /= gain
-        else:
-            gain = 1
-        
+    def forward(self, x):
         # Apply first convolution
         out = self.first_conv(x)
         
@@ -222,26 +209,9 @@ class Encoder(nn.Module):
         
         if self.use_residual:
             # Add residual connection for final conv
-            residual = match_channels(features, self.d_latent - 1 if self.power_channel else self.d_latent)
+            residual = match_channels(features, self.d_latent)
             residual = match_time_dimension(residual, out.shape[-1])
             out = out + residual
-
-        # Add power channel if enabled
-        if self.power_channel:
-            # Compute local power for each latent frame
-            B, _, T_latent = out.shape
-
-            total_stride = int(np.prod(self.strides))
-            
-            # Concatenate power channel with learned features
-            out = torch.cat(
-                [
-                    2 * gain * torch.sqrt(torch.mean(x[..., :T_latent * total_stride].view(
-                        B, 1, T_latent, total_stride) ** 2, dim=-1)) - 1,
-                    out
-                ],
-                dim=1
-            )
         
         return out
 
@@ -464,6 +434,7 @@ class DAC(BaseModel, CodecMixin):
         self.latent_noise_max = latent_noise_max
         self.use_residual = use_residual
         self.structured_latent = structured_latent
+        self.power_channel = power_channel
 
         if latent_dim is None:
             latent_dim = encoder_dim * np.prod(encoder_multipliers)
@@ -471,7 +442,7 @@ class DAC(BaseModel, CodecMixin):
         self.latent_dim = latent_dim
 
         self.hop_length = np.prod(encoder_strides)
-        self.encoder = Encoder(encoder_dim, encoder_strides, encoder_multipliers, latent_dim, causal=causal, dilate=dilate, use_rmsnorm=use_rmsnorm, use_residual=use_residual, power_channel=power_channel)
+        self.encoder = Encoder(encoder_dim, encoder_strides, encoder_multipliers, latent_dim, causal=causal, dilate=dilate, use_rmsnorm=use_rmsnorm, use_residual=use_residual)
 
         self.decoder = Decoder(
             latent_dim,
@@ -512,7 +483,6 @@ class DAC(BaseModel, CodecMixin):
     def encode(
         self,
         audio_data: torch.Tensor,
-        training: bool = False,
     ):
         """Encode given audio data
 
@@ -520,16 +490,13 @@ class DAC(BaseModel, CodecMixin):
         ----------
         audio_data : Tensor[B x 1 x T]
             Audio data to encode
-        training : bool, optional
-            Whether in training mode, by default False
-            If True and power_channel is enabled, applies random gain augmentation
 
         Returns
         -------
         Tensor[B x D x T]
             Encoded latent representation
         """
-        return self.encoder(audio_data, training=training)
+        return self.encoder(audio_data)
 
     def decode(self, z: torch.Tensor):
         """Decode given latent codes and return audio data
@@ -580,16 +547,31 @@ class DAC(BaseModel, CodecMixin):
                 Encoded latent representation (with noise if training=True)
             "z_clean" : Tensor[B x D x T]
                 Clean encoded latent representation (without noise)
-            "length" : int
-                Number of samples in input audio
             "audio" : Tensor[B x 1 x length]
                 Reconstructed audio
+            "wavlm" : Tensor[B x wavlm_dim x T]
+                WavLM embeddings from latent
+            "z_augmented" : Tensor[B x D x T]
+                Gain-augmented latents when power_channel=True and training=True, 
+                otherwise same as z_clean
         """
         length = audio_data.shape[-1]
         audio_data = self.preprocess(audio_data, sample_rate)
-        z_clean = self.encode(audio_data, training=training)
+        z_clean = self.encode(audio_data)
         
         if training:
+            # Handle power_channel: encode both original and gain-augmented versions
+            if self.power_channel:
+                # Sample random gain from -6dB to 6dB
+                gain = 10 ** ((torch.rand(audio_data.shape[0], 1, 1, device=audio_data.device) * 12 - 6) / 20)
+                audio_augmented = audio_data * gain
+                
+                # Encode gain-augmented version
+                z_augmented = self.encode(audio_augmented)
+            else:
+                # No augmentation, use clean latents
+                z_augmented = z_clean
+            
             # Add Gaussian noise with random std between 0 and latent_noise_max
             z = z_clean + torch.randn_like(z_clean) * torch.rand(z_clean.shape[0], 1, 1, device=z_clean.device) * self.latent_noise_max
             
@@ -606,14 +588,17 @@ class DAC(BaseModel, CodecMixin):
                 # Apply the mask to zero out channels after the cutoff
                 z = z * channel_mask
                 z_clean = z_clean * channel_mask
+                z_augmented = z_augmented * channel_mask
         else:
             z = z_clean
+            z_augmented = z_clean
             
         x = self.decode(z)
         return {
             "audio": x[..., :length],
             "z": z,
             "z_clean": z_clean,
+            "z_augmented": z_augmented,
             "wavlm": self.wavlm_decoder(z),
         }
 

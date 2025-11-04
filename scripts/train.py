@@ -269,6 +269,7 @@ class State:
     gan_loss: losses.GANLoss
     waveform_loss: losses.L1Loss
     l2_latents: losses.L2LatentsLoss
+    power_contrastive_loss: losses.PowerInvariantContrastiveLoss
 
     train_data: AudioDataset
     val_data: AudioDataset
@@ -354,6 +355,7 @@ def load(
     gan_loss = losses.GANLoss(discriminator)
     l2_latents = losses.L2LatentsLoss()
     wavlm_loss = losses.WavLMLoss(device=accel.device)
+    power_contrastive_loss = losses.PowerInvariantContrastiveLoss()
     
     # EMA setup: enabled iff ema_decay > 0
     ema_decay = float(args.get("ema_decay", 0.999))
@@ -394,6 +396,7 @@ def load(
         gan_loss=gan_loss,
         l2_latents=l2_latents,
         wavlm_loss=wavlm_loss,
+        power_contrastive_loss=power_contrastive_loss,
         tracker=tracker,
         train_data=train_data,
         val_data=val_data,
@@ -508,6 +511,10 @@ def train_loop(state, batch, accel, lambdas):
     wavlm_cosine, wavlm_mse = state.wavlm_loss(out["wavlm"], signal)
     output["wavlm/cosine_loss"] = wavlm_cosine
     output["wavlm/mse_loss"] = wavlm_mse
+
+    # Add power contrastive loss if power_channel is enabled
+    if accel.unwrap(state.generator).power_channel:
+        output["power_contrastive/loss"] = state.power_contrastive_loss(out["z_clean"], out["z_augmented"])
 
     # latents warmup computed on effective steps (you already did this right)
     curr_lambdas = dict(lambdas)

@@ -396,6 +396,34 @@ class L2LatentsLoss(nn.Module):
         return torch.mean(torch.pow(latents, 2))
 
 
+class PowerInvariantContrastiveLoss(nn.Module):
+    """Contrastive loss to encourage power-invariant representations.
+    
+    This loss encourages the model to encode power/loudness in the first channel
+    while making the remaining channels invariant to gain changes. It computes
+    a similarity loss between the non-power channels of original and gain-augmented
+    latents, encouraging them to be similar despite different input gains.
+    """
+    
+    def forward(self, z_original: torch.Tensor, z_augmented: torch.Tensor):
+        """Compute contrastive loss between original and augmented latents.
+        
+        Parameters
+        ----------
+        z_original : Tensor[B x D x T]
+            Latent representation from original audio
+        z_augmented : Tensor[B x D x T]
+            Latent representation from gain-augmented audio
+            
+        Returns
+        -------
+        torch.Tensor
+            Contrastive loss encouraging similarity in non-power channels
+        """
+        # Skip the first channel (power channel)
+        return F.mse_loss(z_original[:, 1:, :], z_augmented[:, 1:, :])
+
+
 class WavLMLoss(nn.Module):
     """WavLM loss that returns both cosine and MSE losses between embeddings.
     
