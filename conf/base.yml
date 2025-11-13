@@ -15,7 +15,7 @@ DAC.dilate: true
 DAC.use_rmsnorm: true
 DAC.use_residual: true  # DC-AE inspired parameter-free residual connections
 DAC.structured_latent: false  # Progressive channel dropout for latents
-DAC.power_channel: false  # Use contrastive learning to encourage first channel to encode power
+DAC.power_channel: true  # Use contrastive learning to encourage first channel to encode power
 
 # Discriminator
 Discriminator.sample_rate: 44100
