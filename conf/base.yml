@@ -61,7 +61,7 @@ lambdas:
   mel/loss: 15.0
   wavlm/mse_loss: 50.0
   wavlm/cosine_loss: 50.0
-  power_contrastive/loss: 1.0  # Weight for power-invariant contrastive loss
+  power_contrastive/loss: 100.0  # Weight for power-invariant contrastive loss
 
 # EMA decay (set to 0 to disable EMA)
 ema_decay: 0.999

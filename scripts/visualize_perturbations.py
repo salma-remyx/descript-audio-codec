@@ -34,10 +34,10 @@ def analyze_latent_perturbations(
     dataset_path: Path = Path(""),
     model_path: Path = Path(""),
     hop_length: int = 2048,
-    n_mels: int = 64,
-    window_before: int = 10,
-    window_after: int = 10,
-    max_batch_size: int = 16,
+    n_mels: int = 96,
+    window_before: int = 20,
+    window_after: int = 20,
+    max_batch_size: int = 8,
     sample_perturbations: str = "",
 ):
     """Analyze how perturbations to DAC latents affect mel-spectrogram reconstruction over a dataset.
@@ -77,7 +77,7 @@ def analyze_latent_perturbations(
     cond_number_list = []
     cov_accum = None
 
-    perturbation_magnitudes = np.logspace(-2, 0, 100)
+    perturbation_magnitudes = np.logspace(-1, 0, 100)
     smoothness_sum = np.zeros_like(perturbation_magnitudes, dtype=float)
     smoothness_count = 0
 
@@ -170,19 +170,19 @@ def analyze_latent_perturbations(
     # Plot mean covariance matrix
     visualize_covariance_matrix(
         cov_mean, cond_mean,
-        output_path=output_dir / f"covariance_{model_path.name}_aggregate.svg"
+        output_path=output_dir / f"covariance_{model_path.name}_aggregate.png"
     )
     
     # Plot smoothness curve
     visualize_smoothness_curve(
         perturbation_magnitudes, smoothness_mean, baseline_mean,
-        output_path=output_dir / f"smoothness_{model_path.name}_aggregate.svg"  
+        output_path=output_dir / f"smoothness_{model_path.name}_aggregate.png"  
     )
     
     # Plot locality curve
     visualize_locality_curve(
         relative_times, locality_mean,
-        output_path=output_dir / f"locality_{model_path.name}_aggregate.svg"
+        output_path=output_dir / f"locality_{model_path.name}_aggregate.png"
     )
 
 
