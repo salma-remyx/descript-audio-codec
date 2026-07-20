@@ -10,7 +10,14 @@ observed_landing_zones:
     call_site_specifics: ''
     branch: l3ac-towards-a-lightweight-and-lossless-audio-codec
     timestamp: '2026-07-19T17:04:14Z'
-  last_observed: '2026-07-19T17:04:14Z'
+  - arxiv: 2405.17191v3
+    mode: Mode 2 (adapted port)
+    call_site_specifics: dac.nn.loss.GANLoss.generator_loss, which scripts/train.py:262
+      calls every generator step (state.gan_loss.generator_loss(recons, signal));
+      GANLoss is instantiated at scripts/train.py:186. The diff wir
+    branch: mcgan-enhancing-gan-training-with-regression-based-generator
+    timestamp: '2026-07-20T10:56:40Z'
+  last_observed: '2026-07-20T10:56:40Z'
 rejected_shapes:
 - shape_tag: null
   reason_code: null
@@ -19,4 +26,4 @@ rejected_shapes:
   - arxiv: 2607.14728v1
     timestamp: '2026-07-18T03:54:10Z'
 coordination_signals: []
-last_updated: '2026-07-19T17:04:14Z'
+last_updated: '2026-07-20T10:56:40Z'
