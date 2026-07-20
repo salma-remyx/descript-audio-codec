@@ -7,6 +7,8 @@ from audiotools import AudioSignal
 from audiotools import STFTParams
 from torch import nn
 
+from .regression_adv_loss import regression_generator_loss
+
 
 class L1Loss(nn.L1Loss):
     """L1 Loss between AudioSignals. Defaults
@@ -333,11 +335,23 @@ class GANLoss(nn.Module):
     generated waveforms/spectrograms compared to ground truth
     waveforms/spectrograms. Computes the loss for both the
     discriminator and the generator in separate functions.
+
+    Parameters
+    ----------
+    discriminator : nn.Module
+        Discriminator used to compute the adversarial loss.
+    generator_loss_type : str, optional
+        Generator adversarial loss formulation. ``"hinge"`` (default) keeps the
+        original least-squares loss that regresses ``D(fake)`` toward the fixed
+        target 1. ``"regression"`` uses the MCGAN regression loss, which
+        regresses ``D(fake)`` toward ``D(real)`` instead -- see
+        :func:`dac.nn.regression_adv_loss.regression_generator_loss`.
     """
 
-    def __init__(self, discriminator):
+    def __init__(self, discriminator, generator_loss_type: str = "hinge"):
         super().__init__()
         self.discriminator = discriminator
+        self.generator_loss_type = generator_loss_type
 
     def forward(self, fake, real):
         d_fake = self.discriminator(fake.audio_data)
@@ -356,9 +370,14 @@ class GANLoss(nn.Module):
     def generator_loss(self, fake, real):
         d_fake, d_real = self.forward(fake, real)
 
-        loss_g = 0
-        for x_fake in d_fake:
-            loss_g += torch.mean((1 - x_fake[-1]) ** 2)
+        if self.generator_loss_type == "regression":
+            # MCGAN regression loss: regress D(fake) toward D(real) instead of the
+            # fixed target 1. See dac.nn.regression_adv_loss.
+            loss_g = regression_generator_loss(d_fake, d_real)
+        else:
+            loss_g = 0
+            for x_fake in d_fake:
+                loss_g += torch.mean((1 - x_fake[-1]) ** 2)
 
         loss_feature = 0
 
