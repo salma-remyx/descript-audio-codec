@@ -17,7 +17,14 @@ observed_landing_zones:
       GANLoss is instantiated at scripts/train.py:186. The diff wir
     branch: mcgan-enhancing-gan-training-with-regression-based-generator
     timestamp: '2026-07-20T10:56:40Z'
-  last_observed: '2026-07-20T10:56:40Z'
+  - arxiv: 2607.05250v1
+    mode: Mode 2 (adapted port)
+    call_site_specifics: dac.model.dac.DAC.encode, invoked when DAC is constructed
+      with use_tire=True; TimeInvariantFactorizer is additionally exported from dac.nn
+      as standalone library API (e.g. for invariant_ratio).
+    branch: streaming-neural-speech-codecs-through-time-invariant-repres
+    timestamp: '2026-07-21T05:59:37Z'
+  last_observed: '2026-07-21T05:59:37Z'
 rejected_shapes:
 - shape_tag: null
   reason_code: null
@@ -26,4 +33,4 @@ rejected_shapes:
   - arxiv: 2607.14728v1
     timestamp: '2026-07-18T03:54:10Z'
 coordination_signals: []
-last_updated: '2026-07-20T10:56:40Z'
+last_updated: '2026-07-21T05:59:37Z'
