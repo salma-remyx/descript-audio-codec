@@ -13,6 +13,7 @@ from dac.nn.layers import Snake1d
 from dac.nn.layers import WNConv1d
 from dac.nn.layers import WNConvTranspose1d
 from dac.nn.quantize import ResidualVectorQuantize
+from dac.nn.tire import TimeInvariantFactorizer
 
 
 def init_weights(m):
@@ -157,6 +158,8 @@ class DAC(BaseModel, CodecMixin):
         codebook_dim: Union[int, list] = 8,
         quantizer_dropout: bool = False,
         sample_rate: int = 44100,
+        use_tire: bool = False,
+        tire_learned: bool = False,
     ):
         super().__init__()
 
@@ -191,6 +194,12 @@ class DAC(BaseModel, CodecMixin):
             decoder_rates,
         )
         self.sample_rate = sample_rate
+        # Time-Invariant Representation Extraction (TiCodec, arXiv:2607.05250v1).
+        # When enabled, a global time-invariant vector is factored out of the
+        # encoder latent in ``encode`` so the RVQ quantizes only the
+        # time-varying residual. Default off -> bit-identical to baseline DAC.
+        self.use_tire = use_tire
+        self.tire = TimeInvariantFactorizer(dim=latent_dim, learned=tire_learned)
         self.apply(init_weights)
 
         self.delay = self.get_delay()
@@ -241,9 +250,17 @@ class DAC(BaseModel, CodecMixin):
                 Number of samples in input audio
         """
         z = self.encoder(audio_data)
+        z_inv = None
+        if self.use_tire:
+            # Factor out the global time-invariant component so the RVQ only
+            # quantizes the time-varying residual, then fold it back in to
+            # preserve the [B x D x T] contract returned below.
+            z_inv, z = self.tire.factorize(z)
         z, codes, latents, commitment_loss, codebook_loss = self.quantizer(
             z, n_quantizers
         )
+        if self.use_tire:
+            z = self.tire.combine(z_inv, z)
         return z, codes, latents, commitment_loss, codebook_loss
 
     def decode(self, z: torch.Tensor):

@@ -187,3 +187,36 @@ python -m pytest tests
 
 <p align="left">
 <img src="./assets/objective_comparisons.png" width=75%></p>
+
+## Time-Invariant Representation Extraction (optional)
+
+`DAC(use_tire=True)` enables an optional factorization adapted from
+TiCodec, *Streaming Neural Speech Codecs through Time-Invariant
+Representations* (arXiv:2607.05250v1). When enabled, a global
+time-invariant vector is factored out of the encoder latent in
+`encode`, so the residual vector quantizer only models the time-varying
+residual; the global vector is folded back in before `decode`, leaving
+the `[B x D x T]` contract unchanged. It is off by default, so baseline
+DAC behavior and pretrained weights are unaffected.
+
+```python
+from dac.model.dac import DAC
+
+model = DAC(use_tire=True)            # pooling proxy (no extra params)
+model = DAC(use_tire=True, tire_learned=True)  # small trainable extractor
+```
+
+A parameter-free probe reports how much of an encoder latent sits in the
+time-invariant component versus the time-varying residual the RVQ must
+quantize (useful without retraining):
+
+```python
+from dac.nn.tire import TimeInvariantFactorizer
+
+tire = TimeInvariantFactorizer(dim=model.latent_dim)
+ratio = tire.invariant_ratio(z)   # scalar in [0, 1]
+```
+
+The learned-extractor training objective, multi-level Dual-TIRE, and the
+streaming evaluation suite from the paper are intentionally out of scope
+here and left for a follow-up.
