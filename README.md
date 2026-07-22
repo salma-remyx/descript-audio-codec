@@ -104,6 +104,26 @@ y = model.decompress(x)
 y.write('output.wav')
 ```
 
+### Frequency-localized latents (GLRF)
+Optionally re-express encoder latents in a frequency-localized (Gabor) basis by
+constructing the model with `use_glrf=True`. This is a retraining-free,
+orthonormal basis change: the compressed codes enter the quantizer in a
+frequency-localized basis (exposing and making steerable primitives such as
+pitch and timbre) and are mapped back to the original basis before decoding, so
+pretrained weights are undisturbed and reconstruction is preserved in the
+round-trip sense. `GaborLatentRefactorization` is also available standalone from
+`dac.nn`.
+```python
+from dac.model.dac import DAC
+
+model = DAC(use_glrf=True)  # or DAC.load(weights_path, use_glrf=True)
+x = model.preprocess(signal.audio_data, signal.sample_rate)
+z, codes, latents, _, _ = model.encode(x)  # codes are now frequency-localized
+y = model.decode(z)  # GLRF inverse is applied automatically
+```
+Adapted from _Structural Bottlenecks on Frequency Representation in End-to-End
+Audio Models_ (arXiv:2607.08545).
+
 ### Docker image
 We provide a dockerfile to build a docker image with all the necessary
 dependencies.

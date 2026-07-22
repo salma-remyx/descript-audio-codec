@@ -9,6 +9,7 @@ from audiotools.ml import BaseModel
 from torch import nn
 
 from .base import CodecMixin
+from dac.nn.frequency_basis import GaborLatentRefactorization
 from dac.nn.layers import Snake1d
 from dac.nn.layers import WNConv1d
 from dac.nn.layers import WNConvTranspose1d
@@ -157,6 +158,8 @@ class DAC(BaseModel, CodecMixin):
         codebook_dim: Union[int, list] = 8,
         quantizer_dropout: bool = False,
         sample_rate: int = 44100,
+        use_glrf: bool = False,
+        glrf_sigma_scale: float = 0.25,
     ):
         super().__init__()
 
@@ -191,6 +194,18 @@ class DAC(BaseModel, CodecMixin):
             decoder_rates,
         )
         self.sample_rate = sample_rate
+
+        # Optional Gabor Latent Refactorization (GLRF): a retraining-free,
+        # orthonormal basis change that re-expresses encoder latents in a
+        # frequency-localized basis. Parameter-free, so pretrained weights are
+        # undisturbed. When enabled, latents enter the quantizer in the
+        # frequency-localized basis and are mapped back before decoding.
+        self.glrf = (
+            GaborLatentRefactorization(sigma_scale=glrf_sigma_scale)
+            if use_glrf
+            else None
+        )
+
         self.apply(init_weights)
 
         self.delay = self.get_delay()
@@ -241,6 +256,10 @@ class DAC(BaseModel, CodecMixin):
                 Number of samples in input audio
         """
         z = self.encoder(audio_data)
+        if self.glrf is not None:
+            # Re-express latents in the frequency-localized Gabor basis so the
+            # quantized codes expose frequency-localized primitives.
+            z = self.glrf(z)
         z, codes, latents, commitment_loss, codebook_loss = self.quantizer(
             z, n_quantizers
         )
@@ -263,6 +282,10 @@ class DAC(BaseModel, CodecMixin):
             "audio" : Tensor[B x 1 x length]
                 Decoded audio data.
         """
+        if self.glrf is not None:
+            # Map the frequency-localized latents back to the basis the
+            # pretrained decoder was trained on before reconstructing.
+            z = self.glrf.inverse(z)
         return self.decoder(z)
 
     def forward(
