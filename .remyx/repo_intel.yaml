@@ -24,7 +24,14 @@ observed_landing_zones:
       as standalone library API (e.g. for invariant_ratio).
     branch: streaming-neural-speech-codecs-through-time-invariant-repres
     timestamp: '2026-07-21T05:59:37Z'
-  last_observed: '2026-07-21T05:59:37Z'
+  - arxiv: 2607.08545v1
+    mode: Mode 2 (adapted port)
+    call_site_specifics: "dac.model.dac.DAC.encode (applied to z) and DAC.decode (inverse\
+      \ applied to z) \u2014 reached from the pre-existing forward/compress/decompress\
+      \ pipeline when use_glrf=True; GaborLatentRefactorization is als"
+    branch: structural-bottlenecks-on-frequency-representation-in-end-to
+    timestamp: '2026-07-22T00:59:41Z'
+  last_observed: '2026-07-22T00:59:41Z'
 rejected_shapes:
 - shape_tag: null
   reason_code: null
@@ -33,4 +40,4 @@ rejected_shapes:
   - arxiv: 2607.14728v1
     timestamp: '2026-07-18T03:54:10Z'
 coordination_signals: []
-last_updated: '2026-07-21T05:59:37Z'
+last_updated: '2026-07-22T00:59:41Z'
