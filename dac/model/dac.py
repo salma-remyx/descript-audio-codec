@@ -9,6 +9,7 @@ from audiotools.ml import BaseModel
 from torch import nn
 
 from .base import CodecMixin
+from dac.nn.frequency_basis import GaborLatentRefactorization
 from dac.nn.layers import Snake1d
 from dac.nn.layers import WNConv1d
 from dac.nn.layers import WNConvTranspose1d
@@ -19,6 +20,16 @@ def init_weights(m):
     if isinstance(m, nn.Conv1d):
         nn.init.trunc_normal_(m.weight, std=0.02)
         nn.init.constant_(m.bias, 0)
+
+
+def conv_receptive_field(module: nn.Module) -> int:
+    """Cumulative receptive field (in input samples) of a 1D conv stack."""
+    rf, stride_prod = 1, 1
+    for m in module.modules():
+        if isinstance(m, (nn.Conv1d, nn.ConvTranspose1d)):
+            rf += (m.kernel_size[0] - 1) * m.dilation[0] * stride_prod
+            stride_prod *= m.stride[0]
+    return rf
 
 
 class ResidualUnit(nn.Module):
@@ -157,6 +168,7 @@ class DAC(BaseModel, CodecMixin):
         codebook_dim: Union[int, list] = 8,
         quantizer_dropout: bool = False,
         sample_rate: int = 44100,
+        use_glrf: bool = False,
     ):
         super().__init__()
 
@@ -191,6 +203,19 @@ class DAC(BaseModel, CodecMixin):
             decoder_rates,
         )
         self.sample_rate = sample_rate
+
+        # Optional Gabor Latent Refactorization (GLRF): a retraining-free,
+        # post-hoc transform that re-expresses encoder latents in a
+        # frequency-localized (complex Gabor) basis parameterized to the
+        # encoder's resolution bound delta_f = f_s / R. Parameter-free, so
+        # pretrained weights are undisturbed. GLRF is applied post-hoc on
+        # latents (model.glrf(z)) so codes stay in the basis the codebook
+        # was trained on; decode() maps GLRF features back automatically.
+        self.glrf = None
+        if use_glrf:
+            rf_latent = conv_receptive_field(self.encoder) / self.hop_length
+            self.glrf = GaborLatentRefactorization(receptive_field=rf_latent)
+
         self.apply(init_weights)
 
         self.delay = self.get_delay()
@@ -252,7 +277,11 @@ class DAC(BaseModel, CodecMixin):
         Parameters
         ----------
         z : Tensor[B x D x T]
-            Quantized continuous representation of input
+            Quantized continuous representation of input. When the model was
+            built with ``use_glrf=True``, GLRF features (the output of
+            ``model.glrf(z)``, either ``Tensor[B x D x 2F x T]`` or flattened
+            to ``Tensor[B x D*2F x T]``) are also accepted and are mapped
+            back to the latent basis first.
         length : int, optional
             Number of samples in output audio, by default None
 
@@ -263,6 +292,16 @@ class DAC(BaseModel, CodecMixin):
             "audio" : Tensor[B x 1 x length]
                 Decoded audio data.
         """
+        if self.glrf is not None:
+            # Post-hoc GLRF: frequency-localized features are mapped back to
+            # the basis the pretrained decoder was trained on.
+            n_feature_ch = self.latent_dim * 2 * self.glrf.n_filters
+            if z.dim() == 4:
+                z = self.glrf.inverse(z)
+            elif z.shape[1] == n_feature_ch:
+                z = self.glrf.inverse(
+                    z.view(-1, self.latent_dim, 2 * self.glrf.n_filters, z.shape[-1])
+                )
         return self.decoder(z)
 
     def forward(
