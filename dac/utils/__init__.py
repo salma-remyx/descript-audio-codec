@@ -4,6 +4,8 @@ import argbind
 from audiotools import ml
 
 import dac
+from dac.model.dac import conv_receptive_field
+from dac.nn.frequency_basis import GaborLatentRefactorization
 
 DAC = dac.model.DAC
 Accelerator = ml.Accelerator
@@ -114,10 +116,16 @@ def load_model(
     model_bitrate: str = "8kbps",
     tag: str = "latest",
     load_path: str = None,
+    use_glrf: bool = False,
 ):
     if not load_path:
         load_path = download(
             model_type=model_type, model_bitrate=model_bitrate, tag=tag
         )
     generator = DAC.load(load_path)
+    if use_glrf and generator.glrf is None:
+        # GLRF is parameter-free, so it can be enabled post-hoc on a
+        # pretrained checkpoint without disturbing its weights.
+        rf_latent = conv_receptive_field(generator.encoder) / generator.hop_length
+        generator.glrf = GaborLatentRefactorization(receptive_field=rf_latent)
     return generator
