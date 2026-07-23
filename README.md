@@ -124,6 +124,23 @@ y = model.decode(z)  # GLRF inverse is applied automatically
 Adapted from _Structural Bottlenecks on Frequency Representation in End-to-End
 Audio Models_ (arXiv:2607.08545).
 
+**Update:** the GLRF implementation now follows the paper's mechanism (Section
+4.1) more closely: per-channel temporal normalization, a fixed complex
+Hann-windowed Gabor filterbank parameterized to the encoder's resolution bound
+`delta_f = f_s / R` (R is computed from the encoder's conv stack, so it adapts
+to the 16/24/44.1kHz variants), expanding latents `[B, D, T] -> [B, D, 2F, T]`,
+and a closed-form ridge-fit linear map back to the original latent basis. GLRF
+is applied post-hoc on latents rather than pre-quantizer, so codes stay in the
+basis the codebook was trained on and pretrained checkpoints remain compatible.
+`decode` accepts GLRF features directly and maps them back automatically:
+```python
+model = DAC(use_glrf=True)
+z, codes, latents, _, _ = model.encode(x)
+g = model.glrf(z)          # [B, D, 2F, T] frequency-localized features
+g[:, :, band, :] *= 0.0    # steer: attenuate a frequency band
+y = model.decode(g)        # GLRF inverse is applied automatically
+```
+
 ### Docker image
 We provide a dockerfile to build a docker image with all the necessary
 dependencies.
