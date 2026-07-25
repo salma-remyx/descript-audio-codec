@@ -7,6 +7,7 @@ import torch.nn.functional as F
 from einops import rearrange
 from torch.nn.utils import weight_norm
 
+from dac.nn.dist_match import DistributionalMatchLoss
 from dac.nn.layers import WNConv1d
 
 
@@ -22,7 +23,13 @@ class VectorQuantize(nn.Module):
             improves training stability
     """
 
-    def __init__(self, input_dim: int, codebook_size: int, codebook_dim: int):
+    def __init__(
+        self,
+        input_dim: int,
+        codebook_size: int,
+        codebook_dim: int,
+        dist_match_kind: str = "wasserstein",
+    ):
         super().__init__()
         self.codebook_size = codebook_size
         self.codebook_dim = codebook_dim
@@ -30,6 +37,9 @@ class VectorQuantize(nn.Module):
         self.in_proj = WNConv1d(input_dim, codebook_dim, kernel_size=1)
         self.out_proj = WNConv1d(codebook_dim, input_dim, kernel_size=1)
         self.codebook = nn.Embedding(codebook_size, codebook_dim)
+        # Distributional matching between feature (z_e) and code distributions;
+        # gradients reach both the encoder and the codebook, bypassing the STE.
+        self.dist_match = DistributionalMatchLoss(kind=dist_match_kind)
 
     def forward(self, z):
         """Quantized the input tensor using a fixed codebook and returns
@@ -48,6 +58,9 @@ class VectorQuantize(nn.Module):
             entries
         Tensor[1]
             Codebook loss to update the codebook
+        Tensor[]
+            Distributional matching loss aligning the feature (z_e) and codebook
+            distributions. Zero when not training (no inference overhead).
         Tensor[B x T]
             Codebook indices (quantized discrete representation of input)
         Tensor[B x D x T]
@@ -61,13 +74,23 @@ class VectorQuantize(nn.Module):
         commitment_loss = F.mse_loss(z_e, z_q.detach(), reduction="none").mean([1, 2])
         codebook_loss = F.mse_loss(z_q, z_e.detach(), reduction="none").mean([1, 2])
 
+        # Align the feature/codebook distributions directly (STE-bypassing
+        # signal); only during training to avoid inference overhead. z_e is
+        # channels-first (B, D, T); flatten to (B*T, D) so the feature dim is
+        # last, matching the codebook (N, D).
+        if self.training:
+            feats = rearrange(z_e, "b d t -> (b t) d")
+            dist_match_loss = self.dist_match(feats, self.codebook.weight)
+        else:
+            dist_match_loss = z_e.new_zeros(())
+
         z_q = (
             z_e + (z_q - z_e).detach()
         )  # noop in forward pass, straight-through gradient estimator in backward pass
 
         z_q = self.out_proj(z_q)
 
-        return z_q, commitment_loss, codebook_loss, indices, z_e
+        return z_q, commitment_loss, codebook_loss, dist_match_loss, indices, z_e
 
     def embed_code(self, embed_id):
         return F.embedding(embed_id, self.codebook.weight)
@@ -107,6 +130,7 @@ class ResidualVectorQuantize(nn.Module):
         codebook_size: int = 1024,
         codebook_dim: Union[int, list] = 8,
         quantizer_dropout: float = 0.0,
+        dist_match_kind: str = "wasserstein",
     ):
         super().__init__()
         if isinstance(codebook_dim, int):
@@ -115,10 +139,15 @@ class ResidualVectorQuantize(nn.Module):
         self.n_codebooks = n_codebooks
         self.codebook_dim = codebook_dim
         self.codebook_size = codebook_size
+        # Accumulated distributional matching loss of the last forward pass;
+        # read by the model's forward() to surface ``vq/dist_match_loss``.
+        self.dist_match_loss = 0.0
 
         self.quantizers = nn.ModuleList(
             [
-                VectorQuantize(input_dim, codebook_size, codebook_dim[i])
+                VectorQuantize(
+                    input_dim, codebook_size, codebook_dim[i], dist_match_kind
+                )
                 for i in range(n_codebooks)
             ]
         )
@@ -152,11 +181,15 @@ class ResidualVectorQuantize(nn.Module):
                 entries
             "vq/codebook_loss" : Tensor[1]
                 Codebook loss to update the codebook
+            "vq/dist_match_loss" : Tensor[]
+                Distributional matching loss aligning feature and codebook
+                distributions across the residual codebooks (zero at inference).
         """
         z_q = 0
         residual = z
         commitment_loss = 0
         codebook_loss = 0
+        dist_match_loss = 0
 
         codebook_indices = []
         latents = []
@@ -174,9 +207,14 @@ class ResidualVectorQuantize(nn.Module):
             if self.training is False and i >= n_quantizers:
                 break
 
-            z_q_i, commitment_loss_i, codebook_loss_i, indices_i, z_e_i = quantizer(
-                residual
-            )
+            (
+                z_q_i,
+                commitment_loss_i,
+                codebook_loss_i,
+                dist_match_loss_i,
+                indices_i,
+                z_e_i,
+            ) = quantizer(residual)
 
             # Create mask to apply quantizer dropout
             mask = (
@@ -188,6 +226,7 @@ class ResidualVectorQuantize(nn.Module):
             # Sum losses
             commitment_loss += (commitment_loss_i * mask).mean()
             codebook_loss += (codebook_loss_i * mask).mean()
+            dist_match_loss += (dist_match_loss_i * mask).mean()
 
             codebook_indices.append(indices_i)
             latents.append(z_e_i)
@@ -195,7 +234,11 @@ class ResidualVectorQuantize(nn.Module):
         codes = torch.stack(codebook_indices, dim=1)
         latents = torch.cat(latents, dim=1)
 
-        return z_q, codes, latents, commitment_loss, codebook_loss
+        # Cache so DAC.forward can surface ``vq/dist_match_loss`` without
+        # changing encode()'s public return tuple.
+        self.dist_match_loss = dist_match_loss
+
+        return z_q, codes, latents, commitment_loss, codebook_loss, dist_match_loss
 
     def from_codes(self, codes: torch.Tensor):
         """Given the quantized codes, reconstruct the continuous representation
