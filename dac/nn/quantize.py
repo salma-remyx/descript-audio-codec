@@ -8,6 +8,7 @@ from einops import rearrange
 from torch.nn.utils import weight_norm
 
 from dac.nn.layers import WNConv1d
+from dac.nn.vq_distributional import distributional_matching_loss
 
 
 class VectorQuantize(nn.Module):
@@ -22,7 +23,14 @@ class VectorQuantize(nn.Module):
             improves training stability
     """
 
-    def __init__(self, input_dim: int, codebook_size: int, codebook_dim: int):
+    def __init__(
+        self,
+        input_dim: int,
+        codebook_size: int,
+        codebook_dim: int,
+        distributional: bool = False,
+        dist_kind: str = "wasserstein",
+    ):
         super().__init__()
         self.codebook_size = codebook_size
         self.codebook_dim = codebook_dim
@@ -30,6 +38,13 @@ class VectorQuantize(nn.Module):
         self.in_proj = WNConv1d(input_dim, codebook_dim, kernel_size=1)
         self.out_proj = WNConv1d(codebook_dim, input_dim, kernel_size=1)
         self.codebook = nn.Embedding(codebook_size, codebook_dim)
+
+        # When set, the STE-asymmetric commitment/codebook loss pair is
+        # collapsed into a single STE-bypassing distributional matching
+        # objective (see dac.nn.vq_distributional). Defaults preserve the
+        # original VQ-VQGAN behavior.
+        self.distributional = distributional
+        self.dist_kind = dist_kind
 
     def forward(self, z):
         """Quantized the input tensor using a fixed codebook and returns
@@ -58,8 +73,26 @@ class VectorQuantize(nn.Module):
         z_e = self.in_proj(z)  # z_e : (B x D x T)
         z_q, indices = self.decode_latents(z_e)
 
-        commitment_loss = F.mse_loss(z_e, z_q.detach(), reduction="none").mean([1, 2])
-        codebook_loss = F.mse_loss(z_q, z_e.detach(), reduction="none").mean([1, 2])
+        if self.distributional:
+            # Collapse the dual STE-asymmetric losses into the single
+            # STE-bypassing distributional objective: a distribution-level loss
+            # over the real code vectors ``z_q`` (gradient flows to the codebook
+            # via embedding lookup) and features ``z_e`` (gradient flows to the
+            # encoder), with no detach. Delivered through the weight-1.0
+            # codebook slot; the commitment slot is zeroed so the training
+            # wiring (0.25*commitment + 1.0*codebook) reduces to a single term.
+            dist_loss = distributional_matching_loss(
+                z_e, z_q, kind=self.dist_kind
+            )
+            commitment_loss = torch.zeros_like(dist_loss)
+            codebook_loss = dist_loss
+        else:
+            commitment_loss = F.mse_loss(
+                z_e, z_q.detach(), reduction="none"
+            ).mean([1, 2])
+            codebook_loss = F.mse_loss(
+                z_q, z_e.detach(), reduction="none"
+            ).mean([1, 2])
 
         z_q = (
             z_e + (z_q - z_e).detach()
@@ -107,6 +140,8 @@ class ResidualVectorQuantize(nn.Module):
         codebook_size: int = 1024,
         codebook_dim: Union[int, list] = 8,
         quantizer_dropout: float = 0.0,
+        distributional: bool = False,
+        dist_kind: str = "wasserstein",
     ):
         super().__init__()
         if isinstance(codebook_dim, int):
@@ -118,7 +153,13 @@ class ResidualVectorQuantize(nn.Module):
 
         self.quantizers = nn.ModuleList(
             [
-                VectorQuantize(input_dim, codebook_size, codebook_dim[i])
+                VectorQuantize(
+                    input_dim,
+                    codebook_size,
+                    codebook_dim[i],
+                    distributional=distributional,
+                    dist_kind=dist_kind,
+                )
                 for i in range(n_codebooks)
             ]
         )
