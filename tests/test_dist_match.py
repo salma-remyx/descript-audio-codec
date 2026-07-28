@@ -31,9 +31,10 @@ def test_rvq_forward_returns_dist_match_loss():
     assert rvq.dist_match_loss is dist_match_loss
 
 
-def test_dist_match_gradients_reach_encoder_and_codebook():
-    # The core property: gradients bypass the STE and update BOTH the encoder
-    # (through z_e / in_proj) and the codebook, not just one side.
+def test_dist_match_gradients_reach_codebook_only():
+    # The paper's routing: L_match gradients bypass the STE and update the
+    # codebook, while the features are stop-gradiented so the encoder keeps
+    # training on the reconstruction/commitment signal alone.
     vq = VectorQuantize(input_dim=64, codebook_size=256, codebook_dim=8)
     vq.train()
     z = torch.randn(4, 64, 80)
@@ -43,11 +44,10 @@ def test_dist_match_gradients_reach_encoder_and_codebook():
 
     assert vq.codebook.weight.grad is not None
     assert vq.codebook.weight.grad.abs().sum().item() > 0.0
-    # in_proj uses weight_norm, so its `.weight` is a non-leaf computed tensor;
-    # check the underlying leaf parameters (weight_v / weight_g / bias) instead.
-    encoder_grads = [p.grad for p in vq.in_proj.parameters()]
-    assert all(g is not None for g in encoder_grads)
-    assert sum(g.abs().sum().item() for g in encoder_grads) > 0.0
+    # The encoder side (in_proj / out_proj) must receive no gradient from
+    # L_match: features are detached inside the loss.
+    encoder_params = list(vq.in_proj.parameters()) + list(vq.out_proj.parameters())
+    assert all(p.grad is None for p in encoder_params)
 
 
 def test_dist_match_zero_when_distributions_aligned():
@@ -62,6 +62,21 @@ def test_dist_match_zero_when_distributions_aligned():
     assert val_aligned.item() < 1e-4
     assert val_shifted.item() > 1.0
     assert val_shifted.item() > val_aligned.item()
+
+
+def test_loss_detaches_features_directly():
+    # Module-level guarantee (paper, Sec. 3): even when the caller passes
+    # features that require grad, L_match back-propagates to the codebook
+    # only.
+    loss_fn = DistributionalMatchLoss(kind="wasserstein")
+    feats = torch.randn(64, 8, requires_grad=True)
+    codes = torch.randn(64, 8, requires_grad=True)
+
+    loss_fn(feats, codes).backward()
+
+    assert feats.grad is None
+    assert codes.grad is not None
+    assert codes.grad.abs().sum().item() > 0.0
 
 
 def test_mmd_kind_runs_and_zero_when_aligned():

@@ -317,7 +317,8 @@ class DAC(BaseModel, CodecMixin):
             audio_data, n_quantizers
         )
         # Cached by the quantizer during encode(); a direct distributional
-        # signal to both encoder and codebook that bypasses the STE.
+        # signal to the codebook that bypasses the STE (features are
+        # stop-gradiented inside the loss).
         dist_match_loss = self.quantizer.dist_match_loss
 
         x = self.decode(z)

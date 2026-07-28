@@ -38,7 +38,8 @@ class VectorQuantize(nn.Module):
         self.out_proj = WNConv1d(codebook_dim, input_dim, kernel_size=1)
         self.codebook = nn.Embedding(codebook_size, codebook_dim)
         # Distributional matching between feature (z_e) and code distributions;
-        # gradients reach both the encoder and the codebook, bypassing the STE.
+        # gradients reach the codebook only (features are stop-gradiented
+        # inside the loss), bypassing the STE.
         self.dist_match = DistributionalMatchLoss(kind=dist_match_kind)
 
     def forward(self, z):
@@ -74,10 +75,12 @@ class VectorQuantize(nn.Module):
         commitment_loss = F.mse_loss(z_e, z_q.detach(), reduction="none").mean([1, 2])
         codebook_loss = F.mse_loss(z_q, z_e.detach(), reduction="none").mean([1, 2])
 
-        # Align the feature/codebook distributions directly (STE-bypassing
-        # signal); only during training to avoid inference overhead. z_e is
-        # channels-first (B, D, T); flatten to (B*T, D) so the feature dim is
-        # last, matching the codebook (N, D).
+        # Align the feature/codebook distributions directly (codebook-side,
+        # STE-bypassing signal); only during training to avoid inference
+        # overhead. z_e is channels-first (B, D, T); flatten to (B*T, D) so the
+        # feature dim is last, matching the codebook (N, D). Computed on the
+        # unnormalized vectors, consistent with DAC's existing commitment /
+        # codebook MSE losses (the L2 normalization below is lookup-only).
         if self.training:
             feats = rearrange(z_e, "b d t -> (b t) d")
             dist_match_loss = self.dist_match(feats, self.codebook.weight)

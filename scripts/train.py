@@ -369,7 +369,7 @@ def train(
         "adv/gen_loss": 1.0,
         "vq/commitment_loss": 0.25,
         "vq/codebook_loss": 1.0,
-        "vq/dist_match_loss": 1.0,
+        "vq/dist_match_loss": 0.5,  # paper's gamma (arXiv:2607.15933)
     },
 ):
     util.seed(seed)

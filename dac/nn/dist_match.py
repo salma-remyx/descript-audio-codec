@@ -8,16 +8,24 @@ class DistributionalMatchLoss(nn.Module):
     Aligns the distribution of encoder feature vectors with the distribution
     of codebook vectors. Unlike the per-vector commitment / codebook losses
     (whose codebook gradient is routed through the straight-through estimator),
-    this objective compares the two distributions *directly*: gradients flow to
-    **both** the encoder features and the codebook. That distributional signal
-    is what mitigates the STE gradient mismatch and the codebook collapse that
-    arise when the feature and code distributions drift apart.
+    this objective compares the two distributions *directly*. Following the
+    paper, gradients from this loss are back-propagated to the **codebook
+    only**: the features are stop-gradiented inside ``forward`` so the encoder
+    keeps training on the reconstruction/commitment signal alone, preserving
+    its expressiveness while the codebook is pulled toward the feature
+    distribution. That distributional signal is what mitigates the STE
+    gradient mismatch and the codebook collapse that arise when the feature
+    and code distributions drift apart.
 
     Adapted from "Distributional Matching for Vector Quantization: A Unified
-    Theoretical and Empirical Framework" (arXiv:2607.15933), which instantiates
-    the framework with a Wasserstein-based objective that has a closed form
-    under a diagonal-Gaussian approximation, and shows a non-parametric MMD
-    alternative reaches comparable performance.
+    Theoretical and Empirical Framework" (arXiv:2607.15933). The paper's
+    Wasserstein instantiation uses the full-covariance closed form (its
+    Lemma 3); here we use its diagonal-Gaussian specialization, which is O(D)
+    and parameter-free, and the paper's own Q-Q analysis supports the
+    Gaussianity assumption. The non-parametric MMD alternative is reported to
+    reach comparable performance and is provided as ``kind="mmd"``. Per the
+    paper the loss is weighted by gamma=0.5 and *augments* (does not replace)
+    the standard commitment/codebook losses.
 
     The paper's evaluation is on visual-tokenization benchmarks (a different
     modality with its own training harness); here the loss term itself is
@@ -69,14 +77,16 @@ class DistributionalMatchLoss(nn.Module):
         Returns
         -------
         Tensor
-            Scalar loss. Both inputs keep gradients, so backprop updates the
-            encoder (through ``features``) and the codebook (through
-            ``codebook``).
+            Scalar loss. ``features`` are stop-gradiented (the paper routes
+            this loss to the codebook only), so backprop updates the codebook
+            through ``codebook`` while the encoder is unaffected.
         """
         if self.kind == "none":
             return features.new_zeros(())
 
-        feats = self._as_vectors(features)
+        # Stop-gradient the features: L_match trains the codebook towards the
+        # feature distribution, not the other way around (paper, Sec. 3).
+        feats = self._as_vectors(features.detach())
         codes = self._as_vectors(codebook)
 
         if self.kind == "wasserstein":
