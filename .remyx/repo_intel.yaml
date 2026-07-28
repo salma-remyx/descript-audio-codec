@@ -33,12 +33,12 @@ observed_landing_zones:
     timestamp: '2026-07-22T00:59:41Z'
   - arxiv: 2607.15933v1
     mode: Mode 2 (adapted port)
-    call_site_specifics: Computed inside the existing ResidualVectorQuantize.forward
-      (reached via the pre-existing DAC.encode/DAC.forward model path) and consumed
-      by the existing training entry points scripts/train.py and scr
-    branch: distributional-matching-for-vector-quantization-a-unified-th
-    timestamp: '2026-07-25T03:23:46Z'
-  last_observed: '2026-07-25T03:23:46Z'
+    call_site_specifics: dac.nn.quantize.VectorQuantize.forward (also threaded through
+      ResidualVectorQuantize.forward and reached by dac.model.dac.DAC.encode), but
+      the new distributional branch is opt-in via distributional=Tr
+    branch: distributional-matching-for-vector-quantization-a-unified-th-v2
+    timestamp: '2026-07-28T19:14:25Z'
+  last_observed: '2026-07-28T19:14:25Z'
 rejected_shapes:
 - shape_tag: null
   reason_code: null
@@ -49,4 +49,4 @@ rejected_shapes:
   - arxiv: 2607.05250v1
     timestamp: '2026-07-24T10:07:22Z'
 coordination_signals: []
-last_updated: '2026-07-25T03:23:46Z'
+last_updated: '2026-07-28T19:14:25Z'
