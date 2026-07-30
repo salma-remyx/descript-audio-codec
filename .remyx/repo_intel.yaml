@@ -38,7 +38,14 @@ observed_landing_zones:
       the new distributional branch is opt-in via distributional=Tr
     branch: distributional-matching-for-vector-quantization-a-unified-th-v2
     timestamp: '2026-07-28T19:14:25Z'
-  last_observed: '2026-07-28T19:14:25Z'
+  - arxiv: 2408.17175v3
+    mode: Mode 2 (adapted port)
+    call_site_specifics: DAC.forward and DAC.encode (the library's central codec entry
+      point), opt-in via use_semantic=True; also exported as dac.nn.semantic for direct
+      import.
+    branch: codec-does-matter-exploring-the-semantic-shortcoming-of-code
+    timestamp: '2026-07-30T02:07:10Z'
+  last_observed: '2026-07-30T02:07:10Z'
 rejected_shapes:
 - shape_tag: null
   reason_code: null
@@ -49,4 +56,4 @@ rejected_shapes:
   - arxiv: 2607.05250v1
     timestamp: '2026-07-24T10:07:22Z'
 coordination_signals: []
-last_updated: '2026-07-28T19:14:25Z'
+last_updated: '2026-07-30T02:07:10Z'
