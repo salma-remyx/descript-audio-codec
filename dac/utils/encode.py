@@ -27,6 +27,7 @@ def encode(
     device: str = "cuda",
     model_type: str = "44khz",
     win_duration: float = 5.0,
+    use_glrf: bool = False,
     verbose: bool = False,
 ):
     """Encode audio files in input path to .dac format.
@@ -50,12 +51,15 @@ def encode(
         Device to use, by default "cuda"
     model_type : str, optional
         The type of model to use. Must be one of "44khz", "24khz", or "16khz". Defaults to "44khz". Ignored if `weights_path` is specified.
+    use_glrf : bool, optional
+        Enable Gabor Latent Refactorization (GLRF) on the model, by default False.
     """
     generator = load_model(
         model_type=model_type,
         model_bitrate=model_bitrate,
         tag=model_tag,
         load_path=weights_path,
+        use_glrf=use_glrf,
     )
     generator.to(device)
     generator.eval()
