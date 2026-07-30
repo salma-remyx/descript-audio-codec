@@ -187,3 +187,30 @@ python -m pytest tests
 
 <p align="left">
 <img src="./assets/objective_comparisons.png" width=75%></p>
+
+## Finite Scalar Quantization (FSQ) — opt-in alternative quantizer
+
+In addition to the default learned residual codebooks (RVQ), the codec supports
+an opt-in, codebook-free quantizer based on **finite scalar quantization**,
+adapted from the `AuEmoCodec` component of *AuEmoChat: Authentic Emotion
+Understanding and Rendering for Conversational Speech Synthesis*
+([arXiv:2607.15755](https://arxiv.org/abs/2607.15755v1)). FSQ rounds a
+low-dimensional projection of the latent onto a fixed grid of integer levels;
+the implicit codebook (`prod(levels)` entries) cannot collapse, so no
+commitment/codebook auxiliary loss is needed. Pass `quantizer_type="fsq"` at
+construction — the default `"rvq"` behavior is unchanged.
+
+```python
+import torch
+from dac.model import DAC
+
+# FSQ quantizer instead of the learned RVQ codebooks
+model = DAC(quantizer_type="fsq")
+
+audio = torch.randn(1, 1, model.sample_rate)
+z, codes, latents, commit_loss, codebook_loss = model.encode(audio)
+# commit_loss and codebook_loss are exactly zero for FSQ
+```
+
+FSQ can also be used directly via `dac.nn.quantize.ResidualVectorQuantize(
+..., quantizer_type="fsq")` or the standalone `dac.nn.fsq.FiniteScalarQuantize`.

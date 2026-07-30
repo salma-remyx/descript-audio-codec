@@ -157,6 +157,7 @@ class DAC(BaseModel, CodecMixin):
         codebook_dim: Union[int, list] = 8,
         quantizer_dropout: bool = False,
         sample_rate: int = 44100,
+        quantizer_type: str = "rvq",
     ):
         super().__init__()
 
@@ -183,6 +184,7 @@ class DAC(BaseModel, CodecMixin):
             codebook_size=codebook_size,
             codebook_dim=codebook_dim,
             quantizer_dropout=quantizer_dropout,
+            quantizer_type=quantizer_type,
         )
 
         self.decoder = Decoder(
