@@ -45,7 +45,14 @@ observed_landing_zones:
       import.
     branch: codec-does-matter-exploring-the-semantic-shortcoming-of-code
     timestamp: '2026-07-30T02:07:10Z'
-  last_observed: '2026-07-30T02:07:10Z'
+  - arxiv: 2607.15755v1
+    mode: Mode 2 (adapted port)
+    call_site_specifics: DAC.__init__ (dac/model/dac.py:181, via the new quantizer_type
+      kwarg threaded into the pre-existing self.quantizer = ResidualVectorQuantize(...)),
+      reached through DAC.encode (dac.py:246) and CodecMixi
+    branch: auemochat-authentic-emotion-understanding-and-rendering-for-
+    timestamp: '2026-07-30T18:56:12Z'
+  last_observed: '2026-07-30T18:56:12Z'
 rejected_shapes:
 - shape_tag: null
   reason_code: null
@@ -56,4 +63,4 @@ rejected_shapes:
   - arxiv: 2607.05250v1
     timestamp: '2026-07-24T10:07:22Z'
 coordination_signals: []
-last_updated: '2026-07-30T02:07:10Z'
+last_updated: '2026-07-30T18:56:12Z'
