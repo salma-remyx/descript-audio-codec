@@ -239,6 +239,7 @@ def train_loop(state, batch, accel, lambdas):
         recons = AudioSignal(out["audio"], signal.sample_rate)
         commitment_loss = out["vq/commitment_loss"]
         codebook_loss = out["vq/codebook_loss"]
+        dist_match_loss = out["vq/dist_match_loss"]
 
     with accel.autocast():
         output["adv/disc_loss"] = state.gan_loss.discriminator_loss(recons, signal)
@@ -262,6 +263,7 @@ def train_loop(state, batch, accel, lambdas):
         ) = state.gan_loss.generator_loss(recons, signal)
         output["vq/commitment_loss"] = commitment_loss
         output["vq/codebook_loss"] = codebook_loss
+        output["vq/dist_match_loss"] = dist_match_loss
         output["loss"] = sum([v * output[k] for k, v in lambdas.items() if k in output])
 
     state.optimizer_g.zero_grad()
@@ -367,6 +369,7 @@ def train(
         "adv/gen_loss": 1.0,
         "vq/commitment_loss": 0.25,
         "vq/codebook_loss": 1.0,
+        "vq/dist_match_loss": 0.5,  # paper's gamma (arXiv:2607.15933)
     },
 ):
     util.seed(seed)

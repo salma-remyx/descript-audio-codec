@@ -175,6 +175,20 @@ export CUDA_VISIBLE_DEVICES=0,1
 torchrun --nproc_per_node gpu scripts/train.py --args.load conf/ablations/baseline.yml --save_path runs/baseline/
 ```
 
+### Distributional matching loss
+Training enables a distributional matching loss for the VQ codebooks
+([arXiv:2607.15933](https://arxiv.org/abs/2607.15933)) that aligns the
+distribution of encoder features with the distribution of codebook entries.
+Its gradients bypass the straight-through estimator and update the codebook
+directly, while the features are stop-gradiented so the encoder keeps
+training on the reconstruction/commitment signal alone. The loss is computed
+during training only (it is zero at inference) and is surfaced by
+`model.forward` as `vq/dist_match_loss`, which both training scripts
+(`scripts/train.py` and `scripts/train_no_adv.py`) optimize with a default
+weight of 0.5. The default variant is `wasserstein`; to use the `mmd`
+variant instead, construct the quantizer with `dist_match_kind="mmd"`
+(e.g. `ResidualVectorQuantize(..., dist_match_kind="mmd")`).
+
 ## Testing
 We provide two test scripts to test CLI + training functionality. Please
 make sure that the trainig pre-requisites are satisfied before launching these

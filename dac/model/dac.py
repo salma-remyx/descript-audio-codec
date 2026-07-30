@@ -241,7 +241,10 @@ class DAC(BaseModel, CodecMixin):
                 Number of samples in input audio
         """
         z = self.encoder(audio_data)
-        z, codes, latents, commitment_loss, codebook_loss = self.quantizer(
+        # Quantizer also computes the distributional matching loss (cached on
+        # ``self.quantizer.dist_match_loss``); encode()'s public 5-tuple is
+        # unchanged so existing callers / README examples keep working.
+        z, codes, latents, commitment_loss, codebook_loss, _ = self.quantizer(
             z, n_quantizers
         )
         return z, codes, latents, commitment_loss, codebook_loss
@@ -300,6 +303,9 @@ class DAC(BaseModel, CodecMixin):
                 entries
             "vq/codebook_loss" : Tensor[1]
                 Codebook loss to update the codebook
+            "vq/dist_match_loss" : Tensor[]
+                Distributional matching loss aligning feature and codebook
+                distributions (zero at inference).
             "length" : int
                 Number of samples in input audio
             "audio" : Tensor[B x 1 x length]
@@ -310,6 +316,10 @@ class DAC(BaseModel, CodecMixin):
         z, codes, latents, commitment_loss, codebook_loss = self.encode(
             audio_data, n_quantizers
         )
+        # Cached by the quantizer during encode(); a direct distributional
+        # signal to the codebook that bypasses the STE (features are
+        # stop-gradiented inside the loss).
+        dist_match_loss = self.quantizer.dist_match_loss
 
         x = self.decode(z)
         return {
@@ -319,6 +329,7 @@ class DAC(BaseModel, CodecMixin):
             "latents": latents,
             "vq/commitment_loss": commitment_loss,
             "vq/codebook_loss": codebook_loss,
+            "vq/dist_match_loss": dist_match_loss,
         }
 
 
