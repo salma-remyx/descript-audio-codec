@@ -13,6 +13,7 @@ from dac.nn.layers import Snake1d
 from dac.nn.layers import WNConv1d
 from dac.nn.layers import WNConvTranspose1d
 from dac.nn.quantize import ResidualVectorQuantize
+from dac.nn.semantic import SemanticQuantizer
 
 
 def init_weights(m):
@@ -157,6 +158,10 @@ class DAC(BaseModel, CodecMixin):
         codebook_dim: Union[int, list] = 8,
         quantizer_dropout: bool = False,
         sample_rate: int = 44100,
+        use_semantic: bool = False,
+        semantic_downsample: int = 8,
+        semantic_codebook_size: int = 1024,
+        semantic_codebook_dim: int = 32,
     ):
         super().__init__()
 
@@ -185,6 +190,20 @@ class DAC(BaseModel, CodecMixin):
             quantizer_dropout=quantizer_dropout,
         )
 
+        # X-Codec-style coarse-rate semantic codebook (arXiv:2408.17175).
+        # Opt-in; off by default so pretrained checkpoints are unchanged.
+        self.use_semantic = use_semantic
+        self.semantic_quantizer = (
+            SemanticQuantizer(
+                input_dim=latent_dim,
+                downsample=semantic_downsample,
+                codebook_size=semantic_codebook_size,
+                codebook_dim=semantic_codebook_dim,
+            )
+            if use_semantic
+            else None
+        )
+
         self.decoder = Decoder(
             latent_dim,
             decoder_dim,
@@ -205,6 +224,31 @@ class DAC(BaseModel, CodecMixin):
         audio_data = nn.functional.pad(audio_data, (0, right_pad))
 
         return audio_data
+
+    def _semantic_branch(self, z: torch.Tensor):
+        """Optional X-Codec-style semantic branch (arXiv:2408.17175).
+
+        Returns ``(embed, codes, losses)`` to fuse into ``z`` and augment the
+        acoustic codes, or ``(None, None, None)`` when the branch is off.
+        """
+        if self.semantic_quantizer is None:
+            return None, None, None
+        return self.semantic_quantizer(z)
+
+    def _encode(self, audio_data: torch.Tensor, n_quantizers: int = None):
+        """Encode path: acoustic 5-tuple plus the semantic codes (or None)."""
+        z = self.encoder(audio_data)
+        sem_embed, semantic_codes, sem_losses = self._semantic_branch(z)
+        if sem_embed is not None:
+            # Fuse the restored semantic embedding into the RVQ input.
+            z = z + sem_embed
+        z, codes, latents, commitment_loss, codebook_loss = self.quantizer(
+            z, n_quantizers
+        )
+        if sem_losses is not None:
+            commitment_loss = commitment_loss + sem_losses["vq/commitment_loss"]
+            codebook_loss = codebook_loss + sem_losses["vq/codebook_loss"]
+        return z, codes, latents, commitment_loss, codebook_loss, semantic_codes
 
     def encode(
         self,
@@ -240,11 +284,7 @@ class DAC(BaseModel, CodecMixin):
             "length" : int
                 Number of samples in input audio
         """
-        z = self.encoder(audio_data)
-        z, codes, latents, commitment_loss, codebook_loss = self.quantizer(
-            z, n_quantizers
-        )
-        return z, codes, latents, commitment_loss, codebook_loss
+        return self._encode(audio_data, n_quantizers)[:5]
 
     def decode(self, z: torch.Tensor):
         """Decode given latent codes and return audio data
@@ -307,12 +347,12 @@ class DAC(BaseModel, CodecMixin):
         """
         length = audio_data.shape[-1]
         audio_data = self.preprocess(audio_data, sample_rate)
-        z, codes, latents, commitment_loss, codebook_loss = self.encode(
-            audio_data, n_quantizers
-        )
+        encoded = self._encode(audio_data, n_quantizers)
+        z, codes, latents, commitment_loss, codebook_loss = encoded[:5]
+        semantic_codes = encoded[5]
 
         x = self.decode(z)
-        return {
+        out = {
             "audio": x[..., :length],
             "z": z,
             "codes": codes,
@@ -320,6 +360,9 @@ class DAC(BaseModel, CodecMixin):
             "vq/commitment_loss": commitment_loss,
             "vq/codebook_loss": codebook_loss,
         }
+        if semantic_codes is not None:
+            out["semantic_codes"] = semantic_codes
+        return out
 
 
 if __name__ == "__main__":
