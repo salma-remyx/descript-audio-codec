@@ -321,6 +321,21 @@ class DAC(BaseModel, CodecMixin):
             "vq/codebook_loss": codebook_loss,
         }
 
+    def quantize_conv_stack(self, bits: int = 8, per_channel: bool = True):
+        """Post-training INT8 weight-quantize the encoder/decoder conv stack.
+
+        Adapted from VibeVoice-ASR-BitNet (arXiv:2607.21075), which INT8-
+        quantizes the acoustic tokenizer for real-time edge-CPU inference.
+        DAC's RVQ codebooks are a compact lookup table and stay in float;
+        only the encoder/decoder conv weights are quantized. See
+        ``dac.nn.edge_quantize`` for the measurement harness. Returns ``self``.
+        """
+        from dac.nn.edge_quantize import quantize_conv_weights
+
+        quantize_conv_weights(self.encoder, bits=bits, per_channel=per_channel)
+        quantize_conv_weights(self.decoder, bits=bits, per_channel=per_channel)
+        return self
+
 
 if __name__ == "__main__":
     import numpy as np

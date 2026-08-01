@@ -187,3 +187,29 @@ python -m pytest tests
 
 <p align="left">
 <img src="./assets/objective_comparisons.png" width=75%></p>
+
+## Edge deployment: INT8 weight quantization
+
+For resource-constrained / edge-CPU deployment, the encoder and decoder conv
+stacks (the float acoustic tokenizer) can be INT8-quantized post training.
+The RVQ codebooks are a compact lookup table and stay in float; only the conv
+weights are quantized. The quantized model runs on any backend (no special
+int8 kernels required).
+```py
+import dac
+from audiotools import AudioSignal
+
+model = dac.DAC.load(dac.utils.download(model_type="16khz"))
+model.quantize_conv_stack(bits=8)  # INT8-quantize the conv tokenizer, in place
+```
+
+To measure the speed / quality / memory trade-off before committing, use the
+assessment harness in `dac.nn.edge_quantize`:
+```py
+from dac.nn.edge_quantize import assess_quantization
+
+x = signal.audio_data.to(model.device)            # [B, 1, T]
+report = assess_quantization(model, x, sample_rate=model.sample_rate)
+# -> {'quality_si_snr_db', 'footprint_ratio', 'rtf_float', 'rtf_int8', ...}
+```
+
