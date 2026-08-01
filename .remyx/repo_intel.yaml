@@ -52,7 +52,14 @@ observed_landing_zones:
       reached through DAC.encode (dac.py:246) and CodecMixi
     branch: auemochat-authentic-emotion-understanding-and-rendering-for-
     timestamp: '2026-07-30T18:56:12Z'
-  last_observed: '2026-07-30T18:56:12Z'
+  - arxiv: 2607.21075v1
+    mode: Mode 2 (adapted port)
+    call_site_specifics: The new quantize_conv_weights is invoked from DAC.quantize_conv_stack
+      -- a method added to the pre-existing, library-exported dac.DAC class (dac/model/dac.py);
+      dac.nn.edge_quantize is wired into dac/n
+    branch: vibevoice-asr-bitnet-technical-report
+    timestamp: '2026-08-01T01:19:01Z'
+  last_observed: '2026-08-01T01:19:01Z'
 rejected_shapes:
 - shape_tag: null
   reason_code: null
@@ -63,4 +70,4 @@ rejected_shapes:
   - arxiv: 2607.05250v1
     timestamp: '2026-07-24T10:07:22Z'
 coordination_signals: []
-last_updated: '2026-07-30T18:56:12Z'
+last_updated: '2026-08-01T01:19:01Z'
